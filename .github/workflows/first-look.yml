@@ -21,5 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: libsynrix must be present and current (WAL symbol)
-        run: make setup
+      - name: This-arch libsynrix is present (x86 may be receipts-only)
+        run: make setup-first-look
+      - name: Published aarch64 libsynrix still exports WAL recovery
+        run: python3 scripts/check_demo_pack.py --libdir lib/linux-aarch64 --require-libsynrix --require-wal

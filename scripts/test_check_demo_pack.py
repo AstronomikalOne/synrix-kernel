@@ -32,11 +32,14 @@ class TestDemoPack(unittest.TestCase):
     def test_incomplete_libdir_fails_complete_check(self) -> None:
         script = ROOT / "scripts" / "check_demo_pack.py"
         with tempfile.TemporaryDirectory() as tmp:
-            rc = subprocess.call(
+            proc = subprocess.run(
                 [sys.executable, str(script), "--libdir", tmp, "--require-complete"],
                 cwd=str(ROOT),
+                capture_output=True,
+                text=True,
             )
-        self.assertEqual(rc, 1)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("pack incomplete", proc.stdout)
 
 
 if __name__ == "__main__":

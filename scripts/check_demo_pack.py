@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,9 +25,29 @@ def arch_libdir(override: str | None = None) -> Path:
     return ROOT / "lib" / f"linux-{platform.machine()}"
 
 
+def elf_exports(so: Path, symbol: str) -> bool:
+    """Inspect ELF dynsym without dlopen — works cross-arch on CI."""
+    if not so.is_file():
+        return False
+    for cmd in (
+        ["nm", "-D", "--defined-only", str(so)],
+        ["readelf", "-Ws", str(so)],
+    ):
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        for line in out.splitlines():
+            if symbol in line.split():
+                return True
+    return False
+
+
 def has_wal_symbol(so: Path) -> bool:
     if not so.is_file():
         return False
+    if elf_exports(so, WAL_SYMBOL):
+        return True
     try:
         lib = ctypes.CDLL(str(so))
     except OSError:
