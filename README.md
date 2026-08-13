@@ -45,6 +45,8 @@ No speedup-ratio headline. Commodity ANN also hits high recall at tiny byte frac
 
 ## License
 
-Proprietary. Non-commercial evaluation use only. Contact for OEM licensing and integration.
+Proprietary. Non-commercial evaluation use only.
+
+**Contact:** Ryan Barkley · [xdeviantxmindx@gmail.com](mailto:xdeviantxmindx@gmail.com)
 
 Native library source is not included. Pre-built binaries are provided for evaluation.

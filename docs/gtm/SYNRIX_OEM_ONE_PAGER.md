@@ -60,4 +60,4 @@ git clone https://github.com/AstronomikalOne/synrix-kernel
 cd synrix-kernel && make first-look
 ```
 
-**Contact:** Ryan Barkley · xdeviantxmindx@gmail.com
+**Contact:** Ryan Barkley · [xdeviantxmindx@gmail.com](mailto:xdeviantxmindx@gmail.com)
