@@ -1,0 +1,20 @@
+Copyright (c) 2026 Ryan Barkley. All rights reserved.
+
+This repository is a public first-look artifact for the Synrix OEM memory kernel.
+It is made available for evaluation and non-commercial use only.
+
+You may:
+  - Run `make first-look` for personal or evaluation purposes
+  - Inspect the demo scripts for evaluation
+
+You may not:
+  - Use this software or its derivatives in a commercial product or service
+    without a written license from the copyright holder
+  - Redistribute modified versions under a different license
+
+The pre-built native libraries (lib/) are provided as binaries only.
+Their source code is proprietary and not included in this repository.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+For commercial licensing inquiries: xdeviantxmindx@gmail.com

@@ -1,0 +1,25 @@
+name: first-look
+
+# ubuntu-latest is x86_64 — the clone a design partner actually runs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  first-look:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack-check unit tests
+        run: python3 scripts/test_check_demo_pack.py
+      - name: First look (receipts + live or designed-limit banner)
+        run: make first-look
+
+  pack-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: libsynrix must be present and current (WAL symbol)
+        run: make setup

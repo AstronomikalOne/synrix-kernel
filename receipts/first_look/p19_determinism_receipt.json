@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-08-12T22:54:00Z",
+  "git_commit": "addd9049541a3ed96ca1063950fb063b9e4d3276",
+  "harness": "p19_determinism_receipt",
+  "purpose": "E4 differentiator close-out: insertion-order invariance of results",
+  "identity": {
+    "corpus_npz": "/mnt/nvme/aion-omega/synrix-demo/analysis/cwru_corpus.npz",
+    "n_train": 73919,
+    "n_queries": 2000,
+    "split_seed": 0,
+    "shuffle_seed": 12345,
+    "k": 10
+  },
+  "p19": {
+    "reference_recall_at10": 0.989,
+    "shuffled_recall_at10": 0.989,
+    "reference_terminal_tiers": {
+      "B": 1468,
+      "C": 520,
+      "A": 12
+    },
+    "shuffled_terminal_tiers": {
+      "B": 1468,
+      "C": 520,
+      "A": 12
+    },
+    "shuffled_vs_reference": {
+      "n_queries": 2000,
+      "ordered_topk_identical": 2000,
+      "set_topk_identical": 2000,
+      "label_hit_agreement": 2000,
+      "ordered_identical_fraction": 1.0,
+      "set_identical_fraction": 1.0
+    },
+    "note": "Shuffle permutes every bucket/leaf membership list and rebuilds micro-index + backoff unions from the shuffled state, modeling a different item arrival order with identical membership."
+  },
+  "hnsw": {
+    "m": 8,
+    "ef_search": 10,
+    "reference_recall_at10": 0.9945,
+    "shuffled_order_recall_at10": 0.9955,
+    "multithread_recall_at10": 0.996,
+    "shuffled_order_vs_reference": {
+      "n_queries": 2000,
+      "ordered_topk_identical": 863,
+      "set_topk_identical": 863,
+      "label_hit_agreement": 1994,
+      "ordered_identical_fraction": 0.4315,
+      "set_identical_fraction": 0.4315
+    },
+    "multithread_build_vs_reference": {
+      "n_queries": 2000,
+      "ordered_topk_identical": 1082,
+      "set_topk_identical": 1082,
+      "label_hit_agreement": 1991,
+      "ordered_identical_fraction": 0.541,
+      "set_identical_fraction": 0.541
+    }
+  },
+  "verdict": {
+    "p19_order_invariant": true,
+    "hnsw_order_invariant": false
+  }
+}
