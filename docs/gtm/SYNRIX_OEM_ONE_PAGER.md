@@ -1,18 +1,20 @@
-# Synrix — OEM memory kernel (first look)
+# Synrix — receipt-backed agent-state kernel (first look)
 
-**We're not your AI Act program — we're the part of the stack that can still tell the truth after the process dies.**
+**Other memory systems try to improve what an agent remembers. Synrix makes committed agent state survive predictably — and makes that behavior independently observable.**
 
-WAL-backed memory kernel for edge agents on Jetson-class hardware.
-Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not “a second SQLite.”
+Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not a second SQLite. Not an extraction/RAG memory product.
 
-**Buyer:** OEM / air-gap integrator who already has counsel. We make the persistence layer of *their* compliance story true. We are not a GRC aisle product.
+**Buyer:** OEM / air-gap integrator who already has counsel. We sit **under** the semantic-memory layer (Mem0, Letta, Zep, or yours) and make the persistence layer of *their* story true after the process dies. We are not a GRC aisle product.
+
+Positioning: [`docs/gtm/POSITIONING.md`](POSITIONING.md)
 
 ---
 
 ## What you can verify in five minutes
 
 This repo ships **no pre-computed numbers**. Everything is measured by the
-binary in the repo, on your hardware, when you run it:
+binary in the repo, on your hardware, when you run it. **No observation → no
+receipt.**
 
 ```bash
 git clone https://github.com/AstronomikalOne/synrix-kernel
@@ -25,8 +27,12 @@ cd synrix-kernel && make first-look
 | **Injected incomplete WAL tail** | After the same kill, 28 bytes are appended and fsynced. Recovery stops at the fragment and keeps every complete record before it, without reinitializing. Not a power-cut simulation. |
 | **Insertion-order set integrity** | The same 2000 nodes, inserted in natural then shuffled order, return a complete, exact set — nothing dropped, duplicated, or invented. Not retrieval. Not churn. |
 
-`make receipt` writes the result with binary SHA-256 and build ID, board, SoC,
-kernel, L4T, power mode, harness hashes, and every observed value.
+`make receipt` writes binary SHA-256 and build ID, board, SoC, kernel, L4T,
+power mode, harness hashes, command, every observed value (including failures),
+and explicit `establishes` / `does_not_establish` boundaries.
+
+That is **receipt-backed durability**, not a cryptographic proof. Device-key
+signing is the next release.
 
 ---
 
@@ -38,18 +44,24 @@ We would rather you trust a small claim than discover a large one was loose:
   insertion order, so sequences differ by design. The claim is set completeness.
 - **No retrieval, recall, or latency numbers** are made in this pack.
 - Short runs only — nothing about sustained thermal behaviour.
-
-Retrieval work exists but is not part of this kernel pack and is not claimed here.
+- Having a WAL is not the product. The product is the failure contract, the
+  implementation, and the falsification tests, shipped together.
 
 ---
 
-## Why not SQLite?
+## Why not SQLite / RocksDB?
 
-SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. And a capable team can build durability contracts, failure injection, and evidence generation on top of it. Some do.
+They are excellent stores. A capable team can build durability contracts,
+failure injection, and evidence generation on top of them. Some do.
 
-Synrix is for **agent-state workloads under audit pressure**, and the offer is that you don't build that layer: durable persistence under `SIGKILL` after an acknowledged write, recovery past an injected incomplete WAL tail, set completeness when the same node set is inserted in two orders, and the failure-injection harness that proves it — engineered, tested, and versioned as one component. What you're buying is the NRE you skip and the failure modes you don't meet in the field.
+Synrix packages that layer for **agent state**: durable persistence under
+`SIGKILL` after an acknowledged write, recovery past an injected incomplete WAL
+tail, set completeness when the same node set is inserted in two orders, and a
+receipt generated on *this* binary and *this* hardware. Full paragraph:
+[`SQLITE_OBJECTION.md`](SQLITE_OBJECTION.md).
 
-Device-key **signing** of receipts (chain-of-custody an auditor files) is the next release, not this demo. The **ACK-can-lose vs durable-retains** contrast is also roadmap — this pack measures the durable profile only.
+The **ACK-can-lose vs durable-retains** contrast is roadmap — this pack measures
+the durable profile only.
 
 ---
 
@@ -58,9 +70,6 @@ Device-key **signing** of receipts (chain-of-custody an auditor files) is the ne
 `make test` deletes the WAL, zeroes the WAL, and asserts no snapshot exists at
 kill time. If any of those let the demo pass, the test fails. A durability
 demo that cannot fail is decoration.
-
-Still roadmap: the **ACK-can-lose vs durable-retains** contrast runs internally
-but is not yet in the public demo.
 
 ---
 

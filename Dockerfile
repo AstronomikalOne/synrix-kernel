@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
-LABEL description="Synrix OEM memory kernel — first look"
+LABEL description="Synrix receipt-backed agent-state kernel — first look"
 
 WORKDIR /app
 

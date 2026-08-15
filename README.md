@@ -1,23 +1,24 @@
-# Synrix — OEM memory kernel (first look)
+# Synrix — receipt-backed agent-state kernel (first look)
 
-**We're not your AI Act program — we're the part of the stack that can still tell the truth after the process dies.**
+**Other memory systems try to improve what an agent remembers. Synrix makes committed agent state survive predictably — and makes that behavior independently observable.**
 
-WAL-backed memory kernel for edge agents on Jetson-class hardware.
-Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not a second SQLite.
+Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not a second SQLite. Not an extraction/RAG memory product.
 
-One-pager: [`docs/gtm/SYNRIX_OEM_ONE_PAGER.md`](docs/gtm/SYNRIX_OEM_ONE_PAGER.md)
+We sit **under** the semantic-memory layer. They decide what the agent should remember. We answer what was actually committed, what survived failure, and what evidence demonstrates that — against the exact binary and hardware running it.
+
+One-pager: [`docs/gtm/SYNRIX_OEM_ONE_PAGER.md`](docs/gtm/SYNRIX_OEM_ONE_PAGER.md) · Positioning: [`docs/gtm/POSITIONING.md`](docs/gtm/POSITIONING.md)
 
 ---
 
-## This repo ships no numbers
+## Principle: no observation → no claim
 
-There are no pre-computed benchmark files here, and that is deliberate. A JSON
-result you did not produce tells you nothing about your hardware, and hashing it
-only proves the file is still itself.
+There are no pre-computed benchmark files here. A JSON result you did not produce
+tells you nothing about your hardware.
 
-Everything below is measured by `libsynrix.so` in this repo, on your machine,
-at the moment you run it. If a check cannot be measured on your platform, you
-get an honest refusal instead of a fallback number.
+Everything below is measured by `libsynrix.so` in this repo, on your machine, at
+the moment you run it. If a check cannot be measured on your platform, you get
+an honest refusal and **no receipt**. That refusal is the product behaving
+correctly, not a missing feature.
 
 ---
 
@@ -55,31 +56,39 @@ says so and writes nothing. There is no receipts-only fallback path.
 
 ---
 
-## The receipt
+## The receipt is the product
 
 ```bash
 make receipt
 ```
 
-Records what a second machine would need to compare against: binary SHA-256 and
-GNU build ID, board model, SoC, kernel and L4T release, power mode, libc, page
-size, SHA-256 of every harness source, the exact command, and every observed
-value — including failures. It also carries an explicit `claims` block listing
-what the run does *not* establish.
+Not `write() returned success`. A receipt is: on this device, against this
+binary, this acknowledged operation survived this failure scenario, under this
+harness, and here is the evidence.
 
-Receipts are gitignored. Yours should come from your hardware.
+It records binary SHA-256 and GNU build ID, board model, SoC, kernel and L4T
+release, power mode, libc, page size, SHA-256 of every harness source, the exact
+command, every observed value including failures, and an explicit `claims` block
+listing what the run does *not* establish.
+
+Call this **receipt-backed durability**, not a proof. Device-key signing (chain
+of custody an auditor files) is the next release. Receipts are gitignored.
+Yours should come from your hardware.
 
 ---
 
 ## What this does not claim
-
-Scope matters more than adjectives, so plainly:
 
 - **Ordered-sequence equality under reordering is not claimed.** Queries return
   nodes in insertion order, so sequences differ between builds by design. The
   claim is set completeness and exactness, which is narrower.
 - **No retrieval, recall, or latency numbers.** This repo measures durability
   and set integrity. Nothing else.
+- **WAL is not the differentiator.** Storage engines already have one. The
+  offer is the failure contract, the implementation, and the falsification
+  tests, shipped together.
+- **Not “AI memory.”** Extraction, RAG, and personalization live in the layer
+  above. This is **agent state**: what was committed and what survived.
 - **Short runs only.** Nothing here speaks to sustained thermal behaviour.
 - **The binary you hashed is the only one described.** Nothing generalizes to
   other builds.
@@ -110,7 +119,8 @@ Synrix is that layer, already built and versioned as one component. The offer is
 the NRE you skip and the failure modes you meet in a test suite instead of in the
 field. Full paragraph: [`docs/gtm/SQLITE_OBJECTION.md`](docs/gtm/SQLITE_OBJECTION.md).
 
-Device-key signing of receipts is the next release, not this demo.
+Device-key signing of receipts is the next release, not this demo. The public
+ACK-can-lose vs durable-retains contrast is also roadmap.
 
 ---
 
