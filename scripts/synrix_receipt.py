@@ -16,7 +16,6 @@ or worker stdout marker).
 from __future__ import annotations
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
