@@ -18,9 +18,11 @@ Receipts are produced by `make receipt`, on your machine, by the
 | `harness` | SHA-256 of every script the result depends on |
 | `command` | The exact invocation |
 | `results` | Every observed value from every check, including failures |
-| `claims` | Explicit `establishes` / `does_not_establish` lists |
+| `claims` | `established` (only from successful observations), `not_established` (attempted but not observed), `boundaries` (scope this receipt never claims) |
 
-The `binary` and `harness` hashes are the ones that matter for comparison. Two
+A failing run still writes a receipt. `claims.established` is filled only from
+successful observations; failed or missing lanes go in `not_established`.
+`passed: false` never coexists with a positive DURABLE/ACK/WAL claim.
 receipts from different machines should agree on those and differ everywhere in
 `environment`. If the binary hashes differ, you are not comparing the same thing.
 

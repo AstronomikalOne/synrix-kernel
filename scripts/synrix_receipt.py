@@ -143,35 +143,145 @@ def harness_identity() -> dict:
     return {rel: sha256_file(ROOT / rel) for rel in HARNESS_FILES}
 
 
+def _lane(durability: list, tag: str) -> dict:
+    for row in durability or []:
+        if row.get("scenario") == tag:
+            return row
+    return {}
+
+
+def _obs(row: dict) -> str:
+    parts = [
+        f"acknowledged={row.get('write_acked')}",
+        f"sigkill={row.get('killed_by_sigkill')}",
+        f"recovered={row.get('state_recovered')}",
+        f"timeout={bool(row.get('recovery_timeout'))}",
+        f"passed={row.get('passed')}",
+    ]
+    if row.get("failure"):
+        parts.append(f"failure={row['failure']}")
+    return " ".join(parts)
+
+
 def _claims(results: dict) -> dict:
-    """What this receipt does and does not establish. Written out, not implied."""
-    return {
-        "establishes": [
-            "ACK has no durability guarantee. In the unflushed witness lane "
-            "(batch=50000, one op, SIGKILL immediately after ACK) the "
-            "acknowledged write is absent. That is a witness of permitted loss, "
-            "not a rule that ACK writes must disappear.",
-            "DURABLE contract: an acknowledged write under the durable profile "
-            "survives SIGKILL and is recovered by WAL replay in a fresh process.",
-            "The same DURABLE survival holds when an incomplete trailing fragment "
-            "is injected into the WAL before restart.",
-            "No snapshot exists at the expected lattice path after DURABLE kill. "
-            "Deleting that WAL, or zeroing it, leaves the mission absent.",
+    """Populate established only from successful observations. No observation → no claim."""
+    durability = results.get("durability") or []
+    order = results.get("order_invariance") or {}
+    ack = _lane(durability, "ack_unflushed_loss_witness")
+    durable = _lane(durability, "durable_sigkill")
+    tail = _lane(durability, "durable_torn_tail")
+    wal_del = _lane(durability, "wal_delete")
+    wal_zero = _lane(durability, "wal_zero")
+
+    established: list[str] = []
+    not_established: list[str] = []
+
+    if (
+        ack.get("passed")
+        and ack.get("write_acked")
+        and ack.get("killed_by_sigkill")
+        and ack.get("state_recovered") is False
+        and not ack.get("recovery_timeout")
+    ):
+        established.append(
+            "ACK has no durability guarantee. Unflushed witness (batch=50000, "
+            "one op, SIGKILL immediately after ACK): acknowledged write absent."
+        )
+    elif ack:
+        not_established.append(
+            "ACK unflushed-loss witness: NOT ESTABLISHED. " + _obs(ack)
+        )
+    else:
+        not_established.append("ACK unflushed-loss witness: NOT ESTABLISHED (lane missing).")
+
+    if (
+        durable.get("passed")
+        and durable.get("write_acked")
+        and durable.get("killed_by_sigkill")
+        and durable.get("state_recovered")
+        and not durable.get("recovery_timeout")
+    ):
+        established.append(
+            "DURABLE: acknowledged write survived SIGKILL and was recovered "
+            "by WAL replay in a fresh process."
+        )
+    elif durable:
+        not_established.append("DURABLE SIGKILL survival: NOT ESTABLISHED. " + _obs(durable))
+    else:
+        not_established.append("DURABLE SIGKILL survival: NOT ESTABLISHED (lane missing).")
+
+    if (
+        tail.get("passed")
+        and tail.get("state_recovered")
+        and tail.get("tear_injected")
+        and not tail.get("recovery_timeout")
+    ):
+        established.append(
+            "DURABLE survival holds when an incomplete trailing WAL fragment "
+            "is injected before restart."
+        )
+    elif tail:
+        not_established.append("Incomplete-tail recovery: NOT ESTABLISHED. " + _obs(tail))
+    else:
+        not_established.append("Incomplete-tail recovery: NOT ESTABLISHED (lane missing).")
+
+    wal_ok = (
+        wal_del.get("passed")
+        and wal_del.get("state_recovered") is False
+        and not wal_del.get("recovery_timeout")
+        and wal_zero.get("passed")
+        and wal_zero.get("state_recovered") is False
+        and not wal_zero.get("recovery_timeout")
+    )
+    if wal_ok:
+        established.append(
+            "No snapshot at the expected lattice path after DURABLE kill. "
+            "Deleting that WAL, or zeroing it, leaves the mission absent."
+        )
+    else:
+        bits = []
+        if wal_del:
+            bits.append("delete: " + _obs(wal_del))
+        else:
+            bits.append("delete: lane missing")
+        if wal_zero:
+            bits.append("zero: " + _obs(wal_zero))
+        else:
+            bits.append("zero: lane missing")
+        not_established.append("WAL destroy causes loss: NOT ESTABLISHED. " + "; ".join(bits))
+
+    if (
+        order.get("passed")
+        and order.get("set_identical")
+        and order.get("matches_expected_set")
+        and order.get("reference_duplicates") == 0
+        and order.get("shuffled_duplicates") == 0
+    ):
+        established.append(
             "Node sets are complete and exact under insertion-order shuffle: "
-            "nothing dropped, duplicated, or invented. Not retrieval; not churn.",
-        ],
-        "does_not_establish": [
+            "nothing dropped, duplicated, or invented. Not retrieval; not churn."
+        )
+    elif order:
+        not_established.append(
+            "Insertion-order set integrity: NOT ESTABLISHED. "
+            f"passed={order.get('passed')} set_identical={order.get('set_identical')} "
+            f"matches_expected={order.get('matches_expected_set')}"
+        )
+    else:
+        not_established.append("Insertion-order set integrity: NOT ESTABLISHED (lane missing).")
+
+    return {
+        "established": established,
+        "not_established": not_established,
+        "boundaries": [
             "Ordered-sequence equality under reordering. Queries return nodes in "
             "insertion order, so sequences differ by design.",
-            "Retrieval quality, recall, or latency of any kind. This receipt "
-            "measures durability and set integrity only.",
-            "Power-loss, write-ordering under sudden power removal, or "
-            "torn-sector behaviour. The incomplete tail is injected after kill.",
-            "That the binary wrote no other files anywhere on the filesystem. "
-            "The check is the expected snapshot path plus WAL-destroy negatives.",
-            "That ACK writes must disappear. ACK means no durability guarantee. "
-            "The unflushed lane is a witness of permitted loss, not a must-lose API.",
-            "Sustained thermal or multi-hour behaviour. These are short runs.",
+            "Retrieval quality, recall, or latency of any kind.",
+            "Power-loss, write-ordering under sudden power removal, or torn-sector "
+            "behaviour. The incomplete tail is injected after kill.",
+            "That the binary wrote no other files anywhere on the filesystem.",
+            "That ACK writes must disappear. ACK means no durability guarantee.",
+            "Sustained thermal or multi-hour behaviour.",
             "Anything about builds other than the binary hashed above.",
         ],
         "reproduce": "make receipt",

@@ -16,6 +16,7 @@ receipt: setup
 
 test: setup-first-look
 	python3 scripts/test_check_demo_pack.py
+	python3 scripts/test_receipt_claims.py
 	SYNRIX_LIB_PATH="$(CURDIR)/build" python3 scripts/test_durability_harness.py
 
 setup-first-look:

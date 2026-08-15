@@ -21,6 +21,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pack-check unit tests
         run: python3 scripts/test_check_demo_pack.py
+      - name: Receipt claims are conditional on observations
+        run: python3 scripts/test_receipt_claims.py
       - name: Durability harness tests (live cases SKIP on x86_64)
         run: python3 scripts/test_durability_harness.py -v
       - name: First look (designed-limit banner on x86_64; no receipt written)

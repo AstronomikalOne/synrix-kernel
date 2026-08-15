@@ -30,6 +30,7 @@ NODE_BUF = 2048
 ACK_TIMEOUT_S = 30.0
 KILL_TIMEOUT_S = 10.0
 CHILD_MAX_WAIT_S = 120.0
+RECOVERY_TIMEOUT_S = 30.0
 
 # ABI assumption, measured against the kernel headers this pack was cut from:
 #   sizeof(lattice_node_t)       = 1216
@@ -388,31 +389,33 @@ def _scenario(
             print(f"FAIL — {obs['failure']}", flush=True)
             return obs
 
-    cmd_b = [sys.executable, str(Path(__file__)), "--worker", "recall", "--lattice", str(lattice_path)]
-    proc_b = subprocess.run(cmd_b, cwd=str(ROOT), env=lane_env, capture_output=True, text=True)
-    stdout_lines = [ln.strip() for ln in (proc_b.stdout or "").splitlines() if ln.strip()]
-    opened = any(ln == "opened=1" for ln in stdout_lines)
-    line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|")), "")
-    recovered = False
-    if "recovered=" in line:
-        recovered = line.split("recovered=", 1)[1].split("|", 1)[0] == "1"
+    rec = _recall_observation(lattice_path, lane_env)
+    line = rec["line"]
+    opened = rec["opened"]
+    recovered = rec["recovered"]
     obs["lattice_opened"] = opened
     obs["restarted"] = opened
     obs["state_recovered"] = recovered
+    obs["recovery_timeout"] = bool(rec.get("recovery_timeout"))
     _step(
         "Restart runtime",
-        opened,
-        "fresh process opened the lattice" if opened else "no opened=1 marker after lattice_init",
+        opened and not obs["recovery_timeout"],
+        "recovery timed out" if obs["recovery_timeout"]
+        else ("fresh process opened the lattice" if opened else "no opened=1 marker after lattice_init"),
     )
     _step(
         "Recall mission",
-        recovered == expect_recovered,
+        (not obs["recovery_timeout"]) and recovered == expect_recovered,
         "state present" if recovered else "state absent (as observed)",
     )
 
     print(flush=True)
+    if obs["recovery_timeout"]:
+        obs["failure"] = f"recall worker exceeded {RECOVERY_TIMEOUT_S:.0f}s (wedged recovery)"
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
     if not opened:
-        obs["failure"] = (proc_b.stderr or proc_b.stdout or "no worker output").strip()
+        obs["failure"] = rec.get("stderr") or "no worker output"
         print(f"FAIL — lattice did not open ({obs['failure']})", flush=True)
         return obs
 
@@ -471,17 +474,35 @@ def _scenario(
 
 def _recall_observation(lattice_path: Path, env: dict) -> dict:
     cmd = [sys.executable, str(Path(__file__)), "--worker", "recall", "--lattice", str(lattice_path)]
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(ROOT), env=env, capture_output=True, text=True,
+            timeout=RECOVERY_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        return {
+            "opened": False,
+            "line": "",
+            "recovered": False,
+            "stderr": f"recovery_timeout after {RECOVERY_TIMEOUT_S:.0f}s",
+            "returncode": None,
+            "recovery_timeout": True,
+            "stdout_tail": stdout[-400:],
+        }
     stdout_lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
     opened = any(ln == "opened=1" for ln in stdout_lines)
     line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|")), "")
-    recovered = "recovered=1" in line
+    recovered = False
+    if "recovered=" in line:
+        recovered = line.split("recovered=", 1)[1].split("|", 1)[0] == "1"
     return {
         "opened": opened,
         "line": line,
         "recovered": recovered,
         "stderr": (proc.stderr or "").strip(),
         "returncode": proc.returncode,
+        "recovery_timeout": False,
     }
 
 
@@ -530,9 +551,18 @@ def _wal_destroy_witness(demo_dir: Path, env: dict, *, kind: str) -> dict:
     rec = _recall_observation(lattice_path, lane_env)
     obs["lattice_opened"] = rec["opened"]
     obs["state_recovered"] = rec["recovered"]
-    _step("Recall after destroy", rec["opened"] and not rec["recovered"],
-          "state absent" if not rec["recovered"] else "state still present")
+    obs["recovery_timeout"] = bool(rec.get("recovery_timeout"))
+    _step(
+        "Recall after destroy",
+        (not obs["recovery_timeout"]) and not rec["recovered"],
+        "recovery timed out" if obs["recovery_timeout"]
+        else ("state absent" if not rec["recovered"] else "state still present"),
+    )
     print(flush=True)
+    if obs["recovery_timeout"]:
+        obs["failure"] = f"WAL {kind}: recall exceeded {RECOVERY_TIMEOUT_S:.0f}s"
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
     if rec["recovered"]:
         obs["failure"] = f"WAL {kind}: state still recovered; destroy was not load-bearing"
         print(f"FAIL — {obs['failure']}", flush=True)
