@@ -41,7 +41,10 @@ def _env() -> dict:
 
 
 def _write_then_sigkill(tmp: Path) -> Path:
-    """Durably write, wait for the ack, SIGKILL the writer. Returns the WAL."""
+    """Durably write, wait for ACK, then SIGKILL post-ACK / pre-clean-exit.
+
+    Returns the WAL path. Fails the test if ACK never appears.
+    """
     lattice = tmp / "mission.lattice"
     ack = tmp / "write.ack"
     proc = subprocess.Popen(
@@ -54,6 +57,10 @@ def _write_then_sigkill(tmp: Path) -> Path:
         if proc.poll() is not None:
             raise AssertionError(f"writer exited early rc={proc.returncode}")
         time.sleep(0.02)
+    if not ack.is_file():
+        proc.kill()
+        proc.wait(timeout=10.0)
+        raise AssertionError("durable-write ACK never appeared within 30s")
     os.kill(proc.pid, signal.SIGKILL)
     proc.wait(timeout=10.0)
     assert proc.returncode == -signal.SIGKILL, f"expected SIGKILL, got {proc.returncode}"
@@ -77,12 +84,12 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("replayed=1", proc.stdout)
 
-    def test_no_snapshot_is_written_before_kill(self) -> None:
-        """The WAL must be the only persistence — otherwise the test is hollow."""
+    def test_no_snapshot_at_expected_path_before_kill(self) -> None:
+        """Expected lattice snapshot path must be empty so WAL is shown load-bearing."""
         with tempfile.TemporaryDirectory() as tmp:
             wal = _write_then_sigkill(Path(tmp))
             snapshot = Path(str(wal)[: -len(".wal")])
-            self.assertFalse(snapshot.is_file(), "a snapshot existed; WAL was not load-bearing")
+            self.assertFalse(snapshot.is_file(), "a snapshot existed at the expected lattice path")
 
     def test_deleted_wal_is_reported_as_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,8 +121,21 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             cwd=str(ROOT), env=_env(), capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.count("SIGKILLed mid-write"), 2)
-        self.assertIn("torn WAL tail", proc.stdout)
+        self.assertEqual(proc.stdout.count("SIGKILLed post-ACK, pre-clean-exit"), 2)
+        self.assertIn("injected incomplete WAL tail", proc.stdout)
+
+    def test_stderr_without_opened_marker_is_not_a_restart(self) -> None:
+        """A worker that fails before lattice_init must not count as restarted."""
+        env = _env()
+        env["SYNRIX_LIB_PATH"] = "/no/such/libsynrix.so"
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                [sys.executable, str(DRIVER), "--worker", "recall",
+                 "--lattice", str(Path(tmp) / "mission.lattice")],
+                cwd=str(ROOT), env=env, capture_output=True, text=True,
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("opened=1", proc.stdout)
 
 
 class TestHarnessInvariants(unittest.TestCase):
@@ -127,11 +147,15 @@ class TestHarnessInvariants(unittest.TestCase):
             self.assertFalse(injected)
             self.assertIn("no WAL", detail)
 
-    def test_abi_offsets_match_measured_layout(self) -> None:
-        """Pinned against the kernel headers this pack was cut from.
+    def test_harness_offset_constants_are_pinned(self) -> None:
+        """These numbers are the harness's own constants, not a live ABI probe.
 
-        If a future kernel moves these fields, this test fails here rather than
-        the demo misreading node memory in front of a partner.
+        If someone edits NAME_OFF/DATA_OFF in the durability script without
+        intending to, this fails. It does *not* fail if the private C header
+        moves the fields while the Python constants stay 12/76 — that case is
+        caught at runtime by _read_named, which checks that offset 12 still
+        decodes to the requested node name. synrix_abi_version() /
+        synrix_lattice_sizeof() remain the proper fix.
         """
         self.assertEqual(NAME_OFF, 12)
         self.assertEqual(DATA_OFF, 76)

@@ -21,9 +21,9 @@ cd synrix-kernel && make first-look
 
 | Check | What is asserted |
 |-------|------------------|
-| **Clean hard kill** | An acknowledged durable write survives `SIGKILL` and is recovered by WAL replay in a fresh process. No snapshot exists at kill time, so the WAL is the only persistence. |
-| **Torn WAL tail** | With a half-written record appended before restart, recovery stops at the tear and keeps every complete record before it, without reinitializing. |
-| **Insertion-order set integrity** | 2000 nodes built in natural then shuffled order return a complete, exact set — nothing dropped, duplicated, or invented. |
+| **Clean hard kill** | An acknowledged durable write survives `SIGKILL` (post-ACK, pre-clean-exit) and is recovered by WAL replay in a fresh process. No file exists at the expected snapshot path. Destroying the WAL causes loss. |
+| **Injected incomplete WAL tail** | After the same kill, 28 bytes are appended and fsynced. Recovery stops at the fragment and keeps every complete record before it, without reinitializing. Not a power-cut simulation. |
+| **Insertion-order set integrity** | The same 2000 nodes, inserted in natural then shuffled order, return a complete, exact set — nothing dropped, duplicated, or invented. Not retrieval. Not churn. |
 
 `make receipt` writes the result with binary SHA-256 and build ID, board, SoC,
 kernel, L4T, power mode, harness hashes, and every observed value.
@@ -47,9 +47,9 @@ Retrieval work exists but is not part of this kernel pack and is not claimed her
 
 SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. And a capable team can build durability contracts, failure injection, and evidence generation on top of it. Some do.
 
-Synrix is for **agent-state workloads under audit pressure**, and the offer is that you don't build that layer: durable persistence with a receipted ACK-vs-durable contract, set-exact behaviour under churn, and the failure-injection harness that proves it — engineered, tested, and versioned as one component. What you're buying is the NRE you skip and the failure modes you don't meet in the field.
+Synrix is for **agent-state workloads under audit pressure**, and the offer is that you don't build that layer: durable persistence under `SIGKILL` after an acknowledged write, recovery past an injected incomplete WAL tail, set completeness when the same node set is inserted in two orders, and the failure-injection harness that proves it — engineered, tested, and versioned as one component. What you're buying is the NRE you skip and the failure modes you don't meet in the field.
 
-Device-key **signing** of receipts (chain-of-custody an auditor files) is the next release, not this demo.
+Device-key **signing** of receipts (chain-of-custody an auditor files) is the next release, not this demo. The **ACK-can-lose vs durable-retains** contrast is also roadmap — this pack measures the durable profile only.
 
 ---
 

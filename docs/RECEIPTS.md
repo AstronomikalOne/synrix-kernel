@@ -30,15 +30,19 @@ receipts from different machines should agree on those and differ everywhere in
 (`SYNRIX_SYNC_PROFILE=durable`, `fsync`, batch size 0) and signals that the
 write was acknowledged. The parent then sends `SIGKILL`, which cannot be caught
 — no handler runs, nothing flushes, no checkpoint is taken. The harness records
-whether a snapshot file exists at that moment; if one did, the WAL would not be
-load-bearing and the result would be meaningless. A fresh process opens the
-lattice, and the receipt records how many WAL records were replayed and whether
-the WAL was reinitialized.
+whether a file exists at the expected snapshot path at that moment. Absence
+there, plus WAL-destroy negative controls, shows the WAL is load-bearing. It
+does not prove the binary wrote nowhere else on the filesystem. A fresh process
+opens the lattice (emits `opened=1` only after `lattice_init` succeeds), and
+the receipt records how many WAL records were replayed and the worker-reported
+`reinitialized` flag.
 
-**Torn WAL tail.** The same scenario, with 28 bytes of partial record appended
-to the WAL before restart — shorter than an entry header, which is what a power
-cut mid-write leaves behind. Recovery stops at the tear and retains every
-complete record before it.
+**Torn / incomplete WAL tail.** The same scenario, with 28 bytes of incomplete
+record appended and fsynced after the writer is dead. Shorter than an entry
+header. Recovery stops at the fragment and retains every complete record before
+it. This establishes tolerance to an **injected incomplete WAL tail**. It does
+not simulate power loss, filesystem write ordering under sudden power removal,
+storage-cache behaviour, or torn sectors.
 
 One note on a field that is easy to misread: the kernel's `truncated_tail` flag
 reports whether the WAL file was physically rewritten. Recovery does not rewrite
@@ -57,6 +61,11 @@ counts, duplicate counts, set equality, and payload integrity.
   records `ordered_identical: false` rather than hiding it. The claim is set
   completeness and exactness, which is a narrower and true statement.
 - **Retrieval quality, recall, or latency.** Not measured here, not claimed here.
+- **Power-loss behaviour.** The incomplete tail is injected after kill, then
+  fsynced. Not a power cut.
+- **That the binary wrote no other files anywhere.** Expected snapshot path
+  plus WAL-destroy negatives only.
+- **ACK-can-lose vs durable-retains.** Public demo is durable-profile only.
 - **Sustained thermal or multi-hour behaviour.** These runs take seconds.
 - **Anything about other builds.** Only the binary whose hash appears in the
   receipt is described.

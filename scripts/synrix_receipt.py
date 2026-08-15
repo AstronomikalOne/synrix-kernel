@@ -8,8 +8,10 @@ kernel and toolchain, the exact harness sources, and every observed value.
 
   make receipt
 
-Everything in the `results` block is measured. Nothing is copied from a prior
-run. If a check fails, the receipt still writes and records the failure.
+Everything in the `results` block is produced by this run. Nothing is copied
+from a prior artifact. If a check fails, the receipt still writes and records
+the failure. Each observation names its source (filesystem, child exit status,
+or worker stdout marker).
 """
 from __future__ import annotations
 
@@ -148,18 +150,24 @@ def _claims(results: dict) -> dict:
         "establishes": [
             "An acknowledged durable write survives SIGKILL of the writing process "
             "and is recovered by WAL replay in a fresh process.",
-            "The same holds when a half-written record is appended to the WAL "
-            "before restart: recovery stops at the tear and keeps prior records.",
-            "No snapshot file exists at kill time, so the WAL is the only "
-            "persistence in play.",
+            "The same holds when an incomplete trailing fragment is injected "
+            "into the WAL before restart: recovery stops at the fragment and "
+            "keeps prior records.",
+            "No snapshot exists at the expected lattice path, WAL replay is "
+            "observed, and destroying the WAL causes loss.",
             "Node sets are complete and exact under insertion-order shuffle: "
-            "nothing dropped, duplicated, or invented.",
+            "nothing dropped, duplicated, or invented. Not retrieval; not churn.",
         ],
         "does_not_establish": [
             "Ordered-sequence equality under reordering. Queries return nodes in "
             "insertion order, so sequences differ by design.",
             "Retrieval quality, recall, or latency of any kind. This receipt "
             "measures durability and set integrity only.",
+            "Power-loss, write-ordering under sudden power removal, or "
+            "torn-sector behaviour. The incomplete tail is injected after kill.",
+            "That the binary wrote no other files anywhere on the filesystem. "
+            "The check is the expected snapshot path plus WAL-destroy negatives.",
+            "ACK-can-lose vs durable-retains. Public demo is durable-profile only.",
             "Sustained thermal or multi-hour behaviour. These are short runs.",
             "Anything about builds other than the binary hashed above.",
         ],
@@ -168,7 +176,7 @@ def _claims(results: dict) -> dict:
 
 
 def build_receipt(so: Path) -> dict:
-    print("Durability — SIGKILL and torn tail", flush=True)
+    print("Durability — SIGKILL and injected incomplete WAL tail", flush=True)
     print(flush=True)
     durability = run_durability(so)
 

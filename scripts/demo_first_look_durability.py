@@ -5,8 +5,8 @@ No Octopoda. No Python SDK. ctypes against libsynrix.so.
 
 The kill is a real one: the parent waits for the child to acknowledge a durable
 write, then sends SIGKILL. SIGKILL cannot be caught, so no atexit handler, no
-buffer flush, and no lattice checkpoint runs. Whatever is recalled afterwards
-came off the WAL.
+buffer flush, and no lattice checkpoint runs. The kill is post-ACK,
+pre-clean-exit — not mid-write.
 
   make first-look
   python3 scripts/demo_first_look_durability.py
@@ -148,8 +148,8 @@ def _read_named(lib: ctypes.CDLL, lattice, name: str) -> str | None:
 def worker_remember(lattice_path: str, ack_path: str) -> int:
     """Durable write, then idle until the parent SIGKILLs us.
 
-    We never exit on our own. No cleanup, no save, no checkpoint — the durable
-    WAL is the only persistence, and the process dies mid-life to prove it.
+    We never exit on our own. No cleanup, no save, no checkpoint. The process
+    dies after the durable write has returned and been acknowledged.
     """
     _apply_durable_env()
     lib = _load()
@@ -177,6 +177,8 @@ def worker_recall(lattice_path: str) -> int:
     _apply_durable_env()
     lib = _load()
     lat = _open(lib, lattice_path)
+    # Structured marker: parent must not treat stderr noise as a successful open.
+    print("opened=1", flush=True)
     replayed = ctypes.c_uint32(0)
     truncated = ctypes.c_bool(False)
     reinitialized = ctypes.c_bool(False)
@@ -198,7 +200,8 @@ def worker_recall(lattice_path: str) -> int:
         return 1
     print(
         f"ok|lattice|durable|replayed={int(replayed.value)}|"
-        f"truncated_tail={int(bool(truncated.value))}",
+        f"truncated_tail={int(bool(truncated.value))}|"
+        f"reinitialized={int(bool(reinitialized.value))}",
         flush=True,
     )
     return 0
@@ -238,11 +241,15 @@ def _kill_after_ack(cmd: list[str], ack: Path, cwd: str, env: dict) -> tuple[boo
 
     if proc.returncode != -signal.SIGKILL:
         return False, f"expected SIGKILL death, got rc={proc.returncode}"
-    return True, f"pid {proc.pid} SIGKILLed mid-write"
+    return True, f"pid {proc.pid} SIGKILLed post-ACK, pre-clean-exit"
 
 
 def _inject_torn_tail(lattice_path: Path) -> tuple[bool, str]:
-    """Append a half-written record to the WAL, as a power cut would leave it.
+    """Append an incomplete trailing fragment to the WAL after the writer is dead.
+
+    This is an injected incomplete WAL tail, not a power-cut simulation. It
+    does not exercise sudden power removal, write-ordering under power loss, or
+    torn-sector behaviour.
 
     Returns (injected, detail). Refuses to claim success if there is no WAL to
     tear — a missing WAL would mean the write never reached disk at all.
@@ -318,8 +325,9 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
     obs["durable_write_acked"] = ack.is_file()
     obs["killed_by_sigkill"] = killed
     obs["kill_detail"] = kill_detail
-    # If a snapshot exists, the WAL was not the only persistence and the whole
-    # scenario proves nothing. Record it either way.
+    # Expected lattice snapshot path. Absence here, plus WAL-destroy negative
+    # controls, shows the WAL is load-bearing. It does not prove the binary
+    # wrote nowhere else on the filesystem.
     obs["snapshot_file_present_at_kill"] = lattice_path.is_file()
     obs["wal_bytes_at_kill"] = wal_path.stat().st_size if wal_path.is_file() else None
 
@@ -332,11 +340,15 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
         print(f"FAIL — {obs['failure']}", flush=True)
         return obs
 
-    _step("WAL is sole store", not obs["snapshot_file_present_at_kill"],
-          f"no snapshot on disk; WAL is {obs['wal_bytes_at_kill']} bytes"
-          if not obs["snapshot_file_present_at_kill"] else "snapshot present — test is hollow")
+    _step(
+        "Expected snapshot absent",
+        not obs["snapshot_file_present_at_kill"],
+        f"no file at {lattice_path.name}; WAL is {obs['wal_bytes_at_kill']} bytes"
+        if not obs["snapshot_file_present_at_kill"]
+        else "snapshot present at expected path — WAL not shown load-bearing",
+    )
     if obs["snapshot_file_present_at_kill"]:
-        obs["failure"] = "a snapshot existed at kill time; WAL was not load-bearing"
+        obs["failure"] = "a snapshot existed at the expected lattice path; WAL was not shown load-bearing"
         print(flush=True)
         print(f"FAIL — {obs['failure']}", flush=True)
         return obs
@@ -355,11 +367,17 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
 
     cmd_b = [sys.executable, str(Path(__file__)), "--worker", "recall", "--lattice", str(lattice_path)]
     proc_b = subprocess.run(cmd_b, cwd=str(ROOT), env=env, capture_output=True, text=True)
-    line = (proc_b.stdout or "").strip().splitlines()[-1] if proc_b.stdout else ""
-    obs["restarted"] = bool(line or proc_b.stderr)
-    obs["recall_matched_written_value"] = proc_b.returncode == 0 and line.startswith("ok|lattice|durable")
-    _step("Restart runtime", obs["restarted"],
-          "fresh process opened the lattice" if obs["restarted"] else "worker produced no output")
+    stdout_lines = [ln.strip() for ln in (proc_b.stdout or "").splitlines() if ln.strip()]
+    opened = any(ln == "opened=1" for ln in stdout_lines)
+    line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|durable")), "")
+    obs["lattice_opened"] = opened
+    obs["restarted"] = opened
+    obs["recall_matched_written_value"] = proc_b.returncode == 0 and bool(line)
+    _step(
+        "Restart runtime",
+        opened,
+        "fresh process opened the lattice" if opened else "no opened=1 marker after lattice_init",
+    )
     _step("Recall mission", obs["recall_matched_written_value"],
           "" if obs["recall_matched_written_value"] else (proc_b.stderr or "").strip()[:80])
 
@@ -370,14 +388,20 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
         return obs
 
     obs["wal_records_replayed"] = int(line.split("replayed=", 1)[1].split("|", 1)[0])
-    obs["truncated_tail_flag"] = int(line.split("truncated_tail=", 1)[1])
-    obs["wal_reinitialized"] = False  # recall worker exits non-zero if it were
+    obs["truncated_tail_flag"] = int(line.split("truncated_tail=", 1)[1].split("|", 1)[0])
+    if "reinitialized=" in line:
+        obs["wal_reinitialized"] = int(line.split("reinitialized=", 1)[1].split("|", 1)[0]) == 1
+        obs["wal_reinitialized_source"] = "worker ok-line"
+    else:
+        obs["wal_reinitialized"] = None
+        obs["wal_reinitialized_source"] = "absent from worker output"
     obs["passed"] = True
 
     if inject_tear:
         print(
-            "PASS — acknowledged write survived SIGKILL *and* a torn WAL tail "
-            f"(records replayed: {obs['wal_records_replayed']}, WAL not reinitialized)",
+            "PASS — acknowledged write survived SIGKILL *and* an injected incomplete WAL tail "
+            f"(records replayed: {obs['wal_records_replayed']}, "
+            f"reinitialized={int(bool(obs['wal_reinitialized']))})",
             flush=True,
         )
         # Observed behaviour, stated exactly: recovery stops at the first
@@ -385,7 +409,7 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
         # The kernel's truncated_tail flag reports physical file truncation,
         # which this path does not perform — so it reads 0 here by design.
         print(
-            f"  recovery stopped at the torn record; truncated_tail flag="
+            f"  recovery stopped at the incomplete fragment; truncated_tail flag="
             f"{obs['truncated_tail_flag']} (flag means the file was rewritten, "
             "which recovery does not do)",
             flush=True,
@@ -410,8 +434,8 @@ def run_durability(so: Path, env: dict | None = None) -> list[dict]:
     results = [_scenario(demo_dir, run_env, inject_tear=False)]
     if results[0]["passed"]:
         print(flush=True)
-        print("Torn-tail variant — same kill, plus a half-written record appended", flush=True)
-        print("to the WAL before restart (simulates a tear at the moment of power loss).", flush=True)
+        print("Injected incomplete WAL tail — same kill, then 28 bytes appended", flush=True)
+        print("and fsynced before restart. Not a power-cut simulation.", flush=True)
         print(flush=True)
         results.append(_scenario(demo_dir, run_env, inject_tear=True))
 

@@ -22,6 +22,7 @@ import json
 import os
 import random
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -67,27 +68,30 @@ def _load(so: Path) -> ctypes.CDLL:
 def _build_and_read(lib: ctypes.CDLL, order: list[int], names: list[str]) -> list[tuple[str, str]]:
     """Insert nodes in `order`, then read every node back as (name, payload)."""
     tmp = tempfile.mkdtemp(prefix="synrix_order_")
-    buf = ctypes.create_string_buffer(LATTICE_BUF)
-    rc = lib.lattice_init(buf, str(Path(tmp) / "order.lattice").encode(), len(names) * 2 + 64, 0)
-    if rc != 0:
-        raise SystemExit(f"FAIL: lattice_init rc={rc}")
-    for i in order:
-        if not lib.lattice_add_node(buf, NODE_TYPE, names[i].encode(), f"payload-{i}".encode(), 0):
-            raise SystemExit(f"FAIL: add_node returned 0 for {names[i]}")
+    try:
+        buf = ctypes.create_string_buffer(LATTICE_BUF)
+        rc = lib.lattice_init(buf, str(Path(tmp) / "order.lattice").encode(), len(names) * 2 + 64, 0)
+        if rc != 0:
+            raise SystemExit(f"FAIL: lattice_init rc={rc}")
+        for i in order:
+            if not lib.lattice_add_node(buf, NODE_TYPE, names[i].encode(), f"payload-{i}".encode(), 0):
+                raise SystemExit(f"FAIL: add_node returned 0 for {names[i]}")
 
-    cap = len(names) + 64
-    ids = (ctypes.c_uint64 * cap)()
-    found = lib.lattice_find_nodes_by_type(buf, NODE_TYPE, ids, cap)
-    node = ctypes.create_string_buffer(NODE_BUF)
-    out: list[tuple[str, str]] = []
-    for j in range(found):
-        if lib.lattice_get_node_data(buf, ids[j], node) != 0:
-            raise SystemExit(f"FAIL: get_node_data failed for id {ids[j]}")
-        raw = node.raw
-        name = raw[NAME_OFF:NAME_OFF + 64].split(b"\x00", 1)[0].decode("utf-8", "replace")
-        data = raw[DATA_OFF:DATA_OFF + 512].split(b"\x00", 1)[0].decode("utf-8", "replace")
-        out.append((name, data))
-    return out
+        cap = len(names) + 64
+        ids = (ctypes.c_uint64 * cap)()
+        found = lib.lattice_find_nodes_by_type(buf, NODE_TYPE, ids, cap)
+        node = ctypes.create_string_buffer(NODE_BUF)
+        out: list[tuple[str, str]] = []
+        for j in range(found):
+            if lib.lattice_get_node_data(buf, ids[j], node) != 0:
+                raise SystemExit(f"FAIL: get_node_data failed for id {ids[j]}")
+            raw = node.raw
+            name = raw[NAME_OFF:NAME_OFF + 64].split(b"\x00", 1)[0].decode("utf-8", "replace")
+            data = raw[DATA_OFF:DATA_OFF + 512].split(b"\x00", 1)[0].decode("utf-8", "replace")
+            out.append((name, data))
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def run_order_invariance(so: Path, n: int = DEFAULT_N, seed: int = DEFAULT_SEED) -> dict:

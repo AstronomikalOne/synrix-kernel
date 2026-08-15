@@ -34,15 +34,18 @@ On **aarch64** (Jetson-class) this runs three checks and writes a receipt to
 
 1. **Clean hard kill.** A child process writes under durable sync and signals
    the write was acknowledged. The parent sends `SIGKILL` — uncatchable, so no
-   handler, no flush, no checkpoint. The demo verifies no snapshot file exists,
-   so the WAL is the only persistence in play. A fresh process replays and
+   handler, no flush, no checkpoint. The kill is post-ACK, pre-clean-exit. The
+   demo verifies no file exists at the expected snapshot path; WAL replay is
+   observed; destroying the WAL causes loss. A fresh process replays and
    recalls the value.
-2. **Torn tail.** Same kill, then a half-written record is appended to the WAL
-   before restart. Recovery stops at the tear and keeps every complete record
-   before it, without reinitializing.
+2. **Injected incomplete WAL tail.** Same kill, then 28 bytes are appended and
+   fsynced before restart. Recovery stops at the fragment and keeps every
+   complete record before it, without reinitializing. This is not a power-cut
+   simulation.
 3. **Insertion-order set integrity.** 2000 nodes inserted in natural order, then
    again under shuffle seed 12345. The returned set is complete and exact —
-   nothing dropped, duplicated, or invented, payloads intact.
+   nothing dropped, duplicated, or invented, payloads intact. Not retrieval;
+   not churn.
 
 Every printed check derives from an observed condition. The kill is confirmed by
 exit status `-SIGKILL`, not assumed.
