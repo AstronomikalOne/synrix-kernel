@@ -1,0 +1,48 @@
+name: conformance
+
+# Target-hardware ship gate. A qualifying libsynrix.so does not ship unless
+# this job produces an acceptable receipt on aarch64.
+#
+# ubuntu-latest first-look.yml is pack coherence only. This workflow is the
+# conformance suite: ACK witness, DURABLE SIGKILL, WAL delete/zero,
+# incomplete-tail, set integrity — then a receipt, always uploaded, even
+# when conformance is FAIL.
+#
+# Runner: register this Jetson as a GitHub self-hosted runner with labels
+#   self-hosted, linux, aarch64
+# Until that runner exists, this workflow stays queued on workflow_dispatch.
+# Add `push: branches: [main]` only after the runner is online.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  target-hardware:
+    runs-on: [self-hosted, linux, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conformance receipt (keep going so the artifact still uploads)
+        id: suite
+        continue-on-error: true
+        run: |
+          PYTHONUNBUFFERED=1 SYNRIX_LIB_PATH="${GITHUB_WORKSPACE}/build" \
+            make receipt
+
+      - name: Upload receipt (especially on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synrix-conformance-receipt
+          path: receipts/generated/synrix_kernel_receipt.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Conformance card
+        if: always()
+        run: python3 scripts/conformance_summary.py
+
+      - name: Gate — qualifying binary requires PASS
+        if: always()
+        run: test "${{ steps.suite.outcome }}" = "success"

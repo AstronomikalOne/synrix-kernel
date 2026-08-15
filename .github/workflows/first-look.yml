@@ -3,11 +3,9 @@ name: first-look
 # ubuntu-latest is x86_64 — the clone a design partner actually runs.
 #
 # SCOPE, STATED PLAINLY: a green badge here means the demo pack is internally
-# coherent on x86_64. It does NOT mean durability works. The write -> SIGKILL ->
-# WAL replay -> recall path only executes on aarch64, which this runner is not,
-# so the live durability tests SKIP here. Until a self-hosted Jetson runner is
-# wired in, durability is verified by hand on target hardware and this badge
-# must not be read as evidence for it.
+# coherent on x86_64. It does NOT mean durability works and it is NOT a ship
+# gate. Target-hardware conformance lives in conformance.yml (self-hosted
+# aarch64). That job uploads the receipt even on FAIL.
 on:
   push:
     branches: [main]
