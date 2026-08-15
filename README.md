@@ -11,7 +11,9 @@ One-pager: [`docs/gtm/SYNRIX_OEM_ONE_PAGER.md`](docs/gtm/SYNRIX_OEM_ONE_PAGER.md
 
 ## Why not SQLite?
 
-SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. Synrix is for **agent-state workloads under audit pressure**: receipted durability (ACK vs OEM-durable), bit-identical behavior under controlled insert-order and churn tests, and hash-stamped, re-runnable evidence of what the agent still knew after hard kill. An auditor will not ask “did you have a database?” — they will ask “can you show synchronized survival semantics and a trusted record after failure?” SQLite does not productize that; Synrix does.
+SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. A capable team can also build durability contracts, failure injection, and evidence generation around it; teams do. The question is whether you want that on your roadmap.
+
+Synrix ships those as one engineered component: retrieval semantics, deterministic behavior under insert-order and churn, durable persistence, and the evidence artifacts, tested together and versioned together. The sale is the NRE you don't do and the failure modes you don't discover in the field.
 
 Device-key signing of those receipts is the next release, not this demo. Full paragraph: [`docs/gtm/SQLITE_OBJECTION.md`](docs/gtm/SQLITE_OBJECTION.md).
 
@@ -25,7 +27,14 @@ cd synrix-kernel
 make first-look
 ```
 
-Prints the one-pager and four hash-stamped receipts. On **aarch64** (Jetson-class) with a current `libsynrix.so`, it then runs live write → hard-kill → WAL replay → recall (`WAL replayed: N>0`). On **x86_64** (laptop / CI), live durability is a designed limit — same receipt hashes, exit 0, no FAIL banner. Receipts-only: `make first-look-receipts`.
+Prints the one-pager and four receipts, then — on **aarch64** (Jetson-class) with a current `libsynrix.so` — runs the live durability test twice:
+
+1. **Clean hard kill.** Child writes durably, acknowledges, parent sends `SIGKILL`. No snapshot exists on disk; the WAL is the only persistence. Fresh process replays and recalls.
+2. **Torn tail.** Same kill, then a half-written record is appended to the WAL before restart. Recovery stops at the tear and keeps every complete record before it.
+
+Every printed check derives from an observed condition — the kill is verified by exit status `-SIGKILL`, not assumed. `scripts/test_durability_harness.py` proves the demo can fail: delete or zero the WAL and it reports loss.
+
+On **x86_64** (laptop / CI), live durability is a designed limit — receipts print, exit 0, no FAIL banner. Receipts-only: `make first-look-receipts`.
 
 ---
 
@@ -36,10 +45,12 @@ Prints the one-pager and four hash-stamped receipts. On **aarch64** (Jetson-clas
 | Label-hit Recall@10 | ~98.9% |
 | Median native retrieval (C/NEON, warm-process) | ~25.5 µs |
 | Work vs full scan | ~13% bytes |
-| Insertion-order determinism | 2000/2000 ordered top-k identical |
-| Streaming churn-parity | 2000/2000 ordered top-k identical |
+| Ordered top-k invariance under insertion-order shuffle | 2000/2000 — HNSW control on the same test: 863/2000 |
+| Ordered top-k invariance, incremental vs batch build | 2000/2000 |
 
-No speedup-ratio headline. Commodity ANN also hits high recall at tiny byte fractions — the surviving differentiators are determinism and churn-parity. Hashes print from `make first-look`; receipts live in `receipts/first_look/`.
+Read those last two precisely: **ordered top-k identical under one controlled shuffle seed (12345)**, not bitwise-identical execution across builds or platforms. The HNSW control arm is the point — it scores 43% on the test Synrix passes at 100%.
+
+No speedup-ratio headline. Commodity ANN also hits high recall at tiny byte fractions — the surviving differentiator is order-invariance. Receipts live in `receipts/first_look/`; what they do and don't establish is in [`docs/RECEIPTS.md`](docs/RECEIPTS.md).
 
 ---
 

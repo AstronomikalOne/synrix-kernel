@@ -42,13 +42,16 @@ RECEIPTS = [
         ),
     ),
     (
-        "Bit-identical insertion-order determinism",
+        "Ordered top-k invariance under insertion-order shuffle",
         "p19_determinism_receipt.json",
         lambda d: (
-            f"ordered_topk_identical="
+            f"synrix ordered_topk_identical="
             f"{d['p19']['shuffled_vs_reference']['ordered_topk_identical']}/"
             f"{d['p19']['shuffled_vs_reference']['n_queries']}  "
-            f"R@10={d['p19']['reference_recall_at10']}"
+            f"vs HNSW control="
+            f"{d['hnsw']['shuffled_order_vs_reference']['ordered_topk_identical']}/"
+            f"{d['hnsw']['shuffled_order_vs_reference']['n_queries']}  "
+            f"(single shuffle seed {d['identity']['shuffle_seed']})"
         ),
     ),
     (
@@ -93,7 +96,10 @@ def show_one_pager() -> None:
 
 
 def show_receipts() -> bool:
-    _banner("2 · RECEIPTS (credibility — run them yourself)")
+    _banner("2 · RECEIPTS (pre-computed — see docs/RECEIPTS.md for provenance)")
+    print("  These are artifacts from runs on the private research tree, not")
+    print("  regenerated here. The hashes pin the files; they do not re-derive")
+    print("  the results. Independent regeneration is on the roadmap.")
     print("  Note: commodity HNSW/IVF also hit high recall at tiny byte fractions.")
     print("  Surviving differentiators below are determinism + churn-parity.")
     print("  Number rule: print receipt scalars only — never invent a × from division.")

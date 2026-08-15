@@ -11,9 +11,11 @@ Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not “a second 
 
 ## Why not SQLite?
 
-SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. Synrix is for **agent-state workloads under audit pressure**: a closed memory kernel with **receipted durability contracts** (fast ACK vs OEM-durable), **bit-identical / deterministic behavior** under controlled insert-order and churn tests, and **receipted mission evidence** — hash-stamped, re-runnable — of what the agent still knew after outage or hard kill. An EU AI Act / CRA-minded buyer will not ask “did you have a database?” — they will ask “can you show synchronized survival semantics and a trusted record of what remained true after failure?” SQLite does not productize that; Synrix does.
+SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. And a capable team can build durability contracts, failure injection, and evidence generation on top of it. Some do.
 
-Device-key **signing** of those receipts (chain-of-custody an auditor files) is the next release, not this demo.
+Synrix is for **agent-state workloads under audit pressure**, and the offer is that you don't build that layer: retrieval semantics, order-invariant behavior under insert and churn, durable persistence with a receipted ACK-vs-durable contract, and the evidence artifacts — engineered, tested, and versioned as one component. What you're buying is the NRE you skip and the failure modes you don't meet in the field.
+
+Device-key **signing** of those receipts (chain-of-custody an auditor files) is the next release, not this demo. Independent regeneration of the retrieval receipts is roadmap — see `docs/RECEIPTS.md` for what today's artifacts do and don't establish.
 
 ---
 
@@ -21,10 +23,12 @@ Device-key **signing** of those receipts (chain-of-custody an auditor files) is 
 
 | Claim | Receipted result |
 |--------|------------------|
-| **Bit-identical determinism** across insertion-order shuffles | **2000/2000** ordered top-k identical (CWRU holdout) |
+| **Ordered top-k invariant** under insertion-order shuffle | **2000/2000** identical — HNSW control on the same test: **863/2000** (CWRU holdout, shuffle seed 12345) |
 | **Streaming insert/delete at churn-parity** | Incremental vs batch rebuild: **2000/2000** ordered top-k identical; post-churn label-hit **~98.95%** |
 
-These are the operational claims an auditor can press on. Commodity ANN also hits high recall at tiny byte fractions — we do **not** sell “we beat FAISS/HNSW on retrieval efficiency.”
+Stated precisely: this is ordered top-k equivalence under one controlled shuffle seed, not bitwise-identical execution across builds, threads, or platforms. Multi-seed and cross-build coverage is roadmap. The control arm is what makes it a claim worth pressing on — the same test applied to HNSW returns a different ordering 57% of the time.
+
+Commodity ANN also hits high recall at tiny byte fractions — we do **not** sell “we beat FAISS/HNSW on retrieval efficiency.”
 
 ---
 
@@ -38,16 +42,20 @@ These are the operational claims an auditor can press on. Commodity ANN also hit
 
 No speedup-ratio headline. Work is byte-fraction vs full scan; latency stands alone. Not an ANN bake-off.
 
-Receipts live in `receipts/first_look/` — path + hash printed by `make first-look`. Prefer **run it yourself** over slide trust.
+Receipts live in `receipts/first_look/` — path + hash printed by `make first-look`. These are artifacts from runs on the private research tree; the hashes pin the files, they do not re-derive the numbers. The durability test below is the part you run yourself.
 
 ---
 
-## Durability (live on this box)
+## Durability (live on this box, aarch64)
 
-Remember → hard-kill process with **no close/save/checkpoint** → restart →
-native WAL replay → recall under **durable** sync. PASS prints backend, profile,
-replayed-entry count, and torn-tail disposition. Separate honesty clip:
-**ACK can lose** after ACK; durable retains.
+Two scenarios, both executed on the evaluator's hardware:
+
+1. **Clean hard kill.** Child process writes under **durable** sync, acknowledges, and the parent sends **`SIGKILL`** — uncatchable, so no handler, no flush, no checkpoint. No snapshot file exists on disk; the WAL is the only persistence. A fresh process replays and recalls.
+2. **Torn tail.** Same kill, then a half-written record is appended to the WAL before restart. Recovery stops at the tear and keeps every complete record before it, without reinitializing.
+
+Every printed check derives from an observed condition — the kill is confirmed by exit status `-SIGKILL`. `scripts/test_durability_harness.py` deletes and zeroes the WAL to prove the demo reports loss when loss occurs.
+
+Still roadmap: the **ACK-can-lose vs durable-retains** contrast runs internally but is not yet in the public demo.
 
 ---
 

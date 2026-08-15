@@ -1,6 +1,13 @@
 name: first-look
 
 # ubuntu-latest is x86_64 — the clone a design partner actually runs.
+#
+# SCOPE, STATED PLAINLY: a green badge here means the demo pack is internally
+# coherent on x86_64. It does NOT mean durability works. The write -> SIGKILL ->
+# WAL replay -> recall path only executes on aarch64, which this runner is not,
+# so the live durability tests SKIP here. Until a self-hosted Jetson runner is
+# wired in, durability is verified by hand on target hardware and this badge
+# must not be read as evidence for it.
 on:
   push:
     branches: [main]
@@ -14,6 +21,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pack-check unit tests
         run: python3 scripts/test_check_demo_pack.py
+      - name: Durability harness tests (live cases SKIP on x86_64)
+        run: python3 scripts/test_durability_harness.py -v
       - name: First look (receipts + live or designed-limit banner)
         run: make first-look
 
