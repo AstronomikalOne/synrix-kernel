@@ -26,16 +26,17 @@ receipts from different machines should agree on those and differ everywhere in
 
 ## What the checks establish
 
-**Durability under `SIGKILL`.** A child writes under durable sync
-(`SYNRIX_SYNC_PROFILE=durable`, `fsync`, batch size 0) and signals that the
-write was acknowledged. The parent then sends `SIGKILL`, which cannot be caught
-— no handler runs, nothing flushes, no checkpoint is taken. The harness records
-whether a file exists at the expected snapshot path at that moment. Absence
-there, plus WAL-destroy negative controls, shows the WAL is load-bearing. It
-does not prove the binary wrote nowhere else on the filesystem. A fresh process
-opens the lattice (emits `opened=1` only after `lattice_init` succeeds), and
-the receipt records how many WAL records were replayed and the worker-reported
-`reinitialized` flag.
+**ACK vs DURABLE.** Same write, same `SIGKILL`, two profiles. Under `ack`
+(batched WAL), the acknowledged write is **absent** after restart — and that
+is a passing result. Under `durable` (per-entry fsync), it **survives**. The
+kernel is the product; the receipt records which contract was observed.
+
+**DURABLE mechanics.** Under `SYNRIX_SYNC_PROFILE=durable` (`fsync`, batch size
+0) the parent sends `SIGKILL` after the write is acknowledged. The harness
+records whether a file exists at the expected snapshot path. Absence there,
+plus WAL-destroy negative controls, shows the WAL is load-bearing. It does not
+prove the binary wrote nowhere else on the filesystem. A fresh process opens
+the lattice (emits `opened=1` only after `lattice_init` succeeds).
 
 **Torn / incomplete WAL tail.** The same scenario, with 28 bytes of incomplete
 record appended and fsynced after the writer is dead. Shorter than an entry
@@ -65,7 +66,6 @@ counts, duplicate counts, set equality, and payload integrity.
   fsynced. Not a power cut.
 - **That the binary wrote no other files anywhere.** Expected snapshot path
   plus WAL-destroy negatives only.
-- **ACK-can-lose vs durable-retains.** Public demo is durable-profile only.
 - **Sustained thermal or multi-hour behaviour.** These runs take seconds.
 - **Anything about other builds.** Only the binary whose hash appears in the
   receipt is described.
@@ -80,8 +80,9 @@ would be worse than no check, because it would look like evidence.
 ## Roadmap
 
 1. aarch64 durability in CI on real hardware, with the generated receipt saved
-   as an artifact bound to the binary SHA.
+   as an artifact bound to the binary SHA (behavioral conformance suite).
 2. `synrix_abi_version()` / `synrix_lattice_sizeof()` exports, so the harness
    stops depending on a pinned struct layout.
-3. The ACK-can-lose vs durable-retains contrast as a public scenario.
-4. Device-key signing, so a receipt is chain-of-custody rather than a checksum.
+3. Device-key signing, so a receipt is chain-of-custody rather than a checksum.
+4. Grow the failure corpus (ENOSPC, concurrent writers, crash cycles, ABI
+   mismatch) — each with declared behavior, experiment, observation, receipt.

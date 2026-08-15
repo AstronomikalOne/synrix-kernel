@@ -2,7 +2,19 @@
 
 **Other memory systems try to improve what an agent remembers. Synrix makes committed agent state survive predictably — and makes that behavior independently observable.**
 
-That sentence is the product. Everything else is how hard it is to falsify.
+## Product stack
+
+| Layer | What it is |
+|-------|------------|
+| **Product** | Durable agent-state kernel |
+| **Contract** | ACK / DURABLE / RECEIPT |
+| **Wedge** | Independently observable failure semantics |
+| **Artifact** | Receipt (evidence interface — not the product) |
+| **Doctrine** | No observation → no claim |
+
+The kernel is the product. Receipt-backed durability is the differentiation.
+The receipt is how that behavior is observed. Do not say “the receipt is the
+product”; that invites “so this is a test/reporting tool?”
 
 ---
 
@@ -52,13 +64,13 @@ Having a WAL is not differentiation. RocksDB and a generation of engines already
 
 The offer is that the **failure contract, the implementation, and the falsification tests ship together**.
 
-Intended contract (ACK vs DURABLE contrast is **roadmap**; this pack measures DURABLE + RECEIPT):
+Intended contract (ACK vs DURABLE is demonstrated in `make first-look`):
 
 ```text
 ACK
   Process-local acknowledgement.
   May be lost under declared failure classes.
-  (Not yet a public demo scenario.)
+  Demonstrated: write ACK, SIGKILL, state absent. PASS — expected contract.
 
 DURABLE
   Acknowledgement after declared persistence boundary.

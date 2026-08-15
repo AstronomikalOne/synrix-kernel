@@ -23,9 +23,10 @@ cd synrix-kernel && make first-look
 
 | Check | What is asserted |
 |-------|------------------|
-| **Clean hard kill** | An acknowledged durable write survives `SIGKILL` (post-ACK, pre-clean-exit) and is recovered by WAL replay in a fresh process. No file exists at the expected snapshot path. Destroying the WAL causes loss. |
-| **Injected incomplete WAL tail** | After the same kill, 28 bytes are appended and fsynced. Recovery stops at the fragment and keeps every complete record before it, without reinitializing. Not a power-cut simulation. |
-| **Insertion-order set integrity** | The same 2000 nodes, inserted in natural then shuffled order, return a complete, exact set — nothing dropped, duplicated, or invented. Not retrieval. Not churn. |
+| **ACK** | Write acknowledged, then `SIGKILL`. State is **absent**. PASS — expected contract. Loss is the promised behaviour. |
+| **DURABLE** | Same kill. State **survives** WAL replay. No file at the expected snapshot path. Destroying the WAL causes loss. |
+| **Injected incomplete WAL tail** | DURABLE kill, then 28 bytes appended and fsynced. Recovery stops at the fragment. Not a power-cut simulation. |
+| **Insertion-order set integrity** | The same 2000 nodes, two insert orders, complete exact set. Not retrieval. Not churn. |
 
 `make receipt` writes binary SHA-256 and build ID, board, SoC, kernel, L4T,
 power mode, harness hashes, command, every observed value (including failures),
@@ -54,14 +55,14 @@ We would rather you trust a small claim than discover a large one was loose:
 They are excellent stores. A capable team can build durability contracts,
 failure injection, and evidence generation on top of them. Some do.
 
-Synrix packages that layer for **agent state**: durable persistence under
-`SIGKILL` after an acknowledged write, recovery past an injected incomplete WAL
-tail, set completeness when the same node set is inserted in two orders, and a
-receipt generated on *this* binary and *this* hardware. Full paragraph:
+Synrix packages that layer for **agent state**: ACK may lose after `SIGKILL`,
+DURABLE retains, recovery past an injected incomplete WAL tail, set completeness
+when the same node set is inserted in two orders, and a receipt generated on
+*this* binary and *this* hardware. Full paragraph:
 [`SQLITE_OBJECTION.md`](SQLITE_OBJECTION.md).
 
-The **ACK-can-lose vs durable-retains** contrast is roadmap — this pack measures
-the durable profile only.
+The **ACK-can-lose vs durable-retains** contrast is in `make first-look`. Device-key
+**signing** of receipts is the next release, not this demo.
 
 ---
 

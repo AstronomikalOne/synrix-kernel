@@ -33,14 +33,26 @@ LIBDIR = arch_libdir()
 LIVE = has_wal_symbol(LIBDIR / "libsynrix.so")
 
 
-def _env() -> dict:
+def _env(profile: str = "durable") -> dict:
     env = os.environ.copy()
     env["SYNRIX_LIB_PATH"] = str(LIBDIR)
     env["PYTHONUNBUFFERED"] = "1"
+    env["SYNRIX_SYNC_PROFILE"] = profile
+    if profile == "ack":
+        env["SYNRIX_WAL_BATCH_SIZE"] = "50000"
+        env["SYNRIX_WAL_ADAPTIVE"] = "1"
+        env["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1000"
+        env["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "100000"
+    else:
+        env["SYNRIX_WAL_BATCH_SIZE"] = "0"
+        env["SYNRIX_WAL_ADAPTIVE"] = "0"
+        env["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1"
+        env["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "1"
+    env["SYNRIX_WAL_SYNC_MODE"] = "fsync"
     return env
 
 
-def _write_then_sigkill(tmp: Path) -> Path:
+def _write_then_sigkill(tmp: Path, profile: str = "durable") -> Path:
     """Durably write, wait for ACK, then SIGKILL post-ACK / pre-clean-exit.
 
     Returns the WAL path. Fails the test if ACK never appears.
@@ -50,7 +62,7 @@ def _write_then_sigkill(tmp: Path) -> Path:
     proc = subprocess.Popen(
         [sys.executable, str(DRIVER), "--worker", "remember",
          "--lattice", str(lattice), "--ack", str(ack)],
-        cwd=str(ROOT), env=_env(), stderr=subprocess.DEVNULL,
+        cwd=str(ROOT), env=_env(profile), stderr=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline and not ack.is_file():
@@ -82,7 +94,20 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             self.assertTrue(wal.is_file(), "durable write left no WAL")
             proc = _recall(wal.with_suffix(""))
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("replayed=1", proc.stdout)
+            self.assertIn("recovered=1", proc.stdout)
+
+    def test_ack_profile_loses_acknowledged_write(self) -> None:
+        """Loss after ACK+SIGKILL is a passing observation of the ack contract."""
+        with tempfile.TemporaryDirectory() as tmp:
+            wal = _write_then_sigkill(Path(tmp), profile="ack")
+            proc = subprocess.run(
+                [sys.executable, str(DRIVER), "--worker", "recall",
+                 "--lattice", str(Path(str(wal)[: -len(".wal")]))],
+                cwd=str(ROOT), env=_env("ack"), capture_output=True, text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("recovered=0", proc.stdout)
+            self.assertIn("opened=1", proc.stdout)
 
     def test_no_snapshot_at_expected_path_before_kill(self) -> None:
         """Expected lattice snapshot path must be empty so WAL is shown load-bearing."""
@@ -96,15 +121,16 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             wal = _write_then_sigkill(Path(tmp))
             wal.unlink()
             proc = _recall(wal.with_suffix(""))
-            self.assertNotEqual(proc.returncode, 0, "deleted WAL must not pass")
-            self.assertIn("replayed=0", proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("recovered=0", proc.stdout)
 
     def test_zeroed_wal_is_reported_as_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             wal = _write_then_sigkill(Path(tmp))
             wal.write_bytes(b"\x00" * wal.stat().st_size)
             proc = _recall(wal.with_suffix(""))
-            self.assertNotEqual(proc.returncode, 0, "zeroed WAL must not pass")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("recovered=0", proc.stdout)
 
     def test_torn_tail_still_recovers_acknowledged_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,15 +139,17 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             self.assertTrue(injected, detail)
             proc = _recall(wal.with_suffix(""))
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("replayed=1", proc.stdout)
+            self.assertIn("recovered=1", proc.stdout)
 
-    def test_full_harness_runs_both_scenarios(self) -> None:
+    def test_full_harness_runs_ack_and_durable_scenarios(self) -> None:
         proc = subprocess.run(
             [sys.executable, str(DRIVER)],
             cwd=str(ROOT), env=_env(), capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.count("SIGKILLed post-ACK, pre-clean-exit"), 2)
+        self.assertEqual(proc.stdout.count("SIGKILLed post-ACK, pre-clean-exit"), 3)
+        self.assertIn("ACK contract: write was acknowledged, then lost", proc.stdout)
+        self.assertIn("DURABLE contract: acknowledged write survived SIGKILL", proc.stdout)
         self.assertIn("injected incomplete WAL tail", proc.stdout)
 
     def test_stderr_without_opened_marker_is_not_a_restart(self) -> None:

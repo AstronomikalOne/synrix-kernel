@@ -30,23 +30,20 @@ cd synrix-kernel
 make first-look
 ```
 
-On **aarch64** (Jetson-class) this runs three checks and writes a receipt to
+On **aarch64** (Jetson-class) this runs the ACK/DURABLE contract, an injected
+incomplete WAL tail, and set-integrity, then writes a receipt to
 `receipts/generated/`:
 
-1. **Clean hard kill.** A child process writes under durable sync and signals
-   the write was acknowledged. The parent sends `SIGKILL` — uncatchable, so no
-   handler, no flush, no checkpoint. The kill is post-ACK, pre-clean-exit. The
-   demo verifies no file exists at the expected snapshot path; WAL replay is
-   observed; destroying the WAL causes loss. A fresh process replays and
-   recalls the value.
-2. **Injected incomplete WAL tail.** Same kill, then 28 bytes are appended and
-   fsynced before restart. Recovery stops at the fragment and keeps every
-   complete record before it, without reinitializing. This is not a power-cut
-   simulation.
-3. **Insertion-order set integrity.** 2000 nodes inserted in natural order, then
-   again under shuffle seed 12345. The returned set is complete and exact —
-   nothing dropped, duplicated, or invented, payloads intact. Not retrieval;
-   not churn.
+1. **ACK profile.** Child writes, acknowledges, parent sends `SIGKILL`. The
+   write is **lost**. That is a passing result — the promised behaviour, not a
+   defect. Watch us lose this state on purpose.
+2. **DURABLE profile.** Same kill. The write **survives** WAL replay in a
+   fresh process. No file exists at the expected snapshot path; destroying the
+   WAL causes loss.
+3. **Injected incomplete WAL tail.** DURABLE kill, then 28 bytes appended and
+   fsynced. Recovery stops at the fragment. Not a power-cut simulation.
+4. **Insertion-order set integrity.** 2000 nodes, natural then shuffled.
+   Complete exact set. Not retrieval; not churn.
 
 Every printed check derives from an observed condition. The kill is confirmed by
 exit status `-SIGKILL`, not assumed.
@@ -56,15 +53,18 @@ says so and writes nothing. There is no receipts-only fallback path.
 
 ---
 
-## The receipt is the product
+## The receipt is the evidence interface
 
 ```bash
 make receipt
 ```
 
 Not `write() returned success`. A receipt is: on this device, against this
-binary, this acknowledged operation survived this failure scenario, under this
-harness, and here is the evidence.
+binary, this acknowledged operation survived — or was lost, if that was the
+declared contract — under this harness, and here is the evidence.
+
+The **kernel** is the product. **Receipt-backed durability** is the
+differentiation. The receipt is the evidence interface.
 
 It records binary SHA-256 and GNU build ID, board model, SoC, kernel and L4T
 release, power mode, libc, page size, SHA-256 of every harness source, the exact
@@ -119,8 +119,7 @@ Synrix is that layer, already built and versioned as one component. The offer is
 the NRE you skip and the failure modes you meet in a test suite instead of in the
 field. Full paragraph: [`docs/gtm/SQLITE_OBJECTION.md`](docs/gtm/SQLITE_OBJECTION.md).
 
-Device-key signing of receipts is the next release, not this demo. The public
-ACK-can-lose vs durable-retains contrast is also roadmap.
+Device-key signing of receipts is the next release, not this demo.
 
 ---
 

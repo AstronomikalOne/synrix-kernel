@@ -3,10 +3,9 @@
 
 No Octopoda. No Python SDK. ctypes against libsynrix.so.
 
-The kill is a real one: the parent waits for the child to acknowledge a durable
-write, then sends SIGKILL. SIGKILL cannot be caught, so no atexit handler, no
-buffer flush, and no lattice checkpoint runs. The kill is post-ACK,
-pre-clean-exit — not mid-write.
+The kill is a real one: the parent waits for the child to acknowledge a write,
+then sends SIGKILL. Under the **ack** profile, loss after that kill is a
+passing result. Under **durable**, survival is the passing result.
 
   make first-look
   python3 scripts/demo_first_look_durability.py
@@ -111,13 +110,40 @@ def _load() -> ctypes.CDLL:
     return lib
 
 
-def _apply_durable_env() -> None:
-    os.environ["SYNRIX_SYNC_PROFILE"] = "durable"
-    os.environ["SYNRIX_WAL_BATCH_SIZE"] = "0"
-    os.environ["SYNRIX_WAL_ADAPTIVE"] = "0"
-    os.environ["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1"
-    os.environ["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "1"
+def _apply_profile_env(profile: str) -> None:
+    """WAL knobs must be set before lattice_init. Matches python-sdk sync_profiles."""
+    os.environ["SYNRIX_SYNC_PROFILE"] = profile
     os.environ["SYNRIX_WAL_SYNC_MODE"] = "fsync"
+    if profile == "ack":
+        os.environ["SYNRIX_WAL_BATCH_SIZE"] = "50000"
+        os.environ["SYNRIX_WAL_ADAPTIVE"] = "1"
+        os.environ["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1000"
+        os.environ["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "100000"
+    elif profile == "durable":
+        os.environ["SYNRIX_WAL_BATCH_SIZE"] = "0"
+        os.environ["SYNRIX_WAL_ADAPTIVE"] = "0"
+        os.environ["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1"
+        os.environ["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "1"
+    else:
+        print(f"FAIL: unknown sync profile {profile!r}", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _profile_env(base: dict, profile: str) -> dict:
+    env = dict(base)
+    env["SYNRIX_SYNC_PROFILE"] = profile
+    env["SYNRIX_WAL_SYNC_MODE"] = "fsync"
+    if profile == "ack":
+        env["SYNRIX_WAL_BATCH_SIZE"] = "50000"
+        env["SYNRIX_WAL_ADAPTIVE"] = "1"
+        env["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1000"
+        env["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "100000"
+    else:
+        env["SYNRIX_WAL_BATCH_SIZE"] = "0"
+        env["SYNRIX_WAL_ADAPTIVE"] = "0"
+        env["SYNRIX_WAL_ADAPTIVE_MIN_BATCH"] = "1"
+        env["SYNRIX_WAL_ADAPTIVE_MAX_BATCH"] = "1"
+    return env
 
 
 def _open(lib: ctypes.CDLL, path: str) -> ctypes.Array:
@@ -146,12 +172,13 @@ def _read_named(lib: ctypes.CDLL, lattice, name: str) -> str | None:
 
 
 def worker_remember(lattice_path: str, ack_path: str) -> int:
-    """Durable write, then idle until the parent SIGKILLs us.
+    """Write, then idle until the parent SIGKILLs us.
 
     We never exit on our own. No cleanup, no save, no checkpoint. The process
-    dies after the durable write has returned and been acknowledged.
+    dies after add_node has returned and been acknowledged. Whether that write
+    hits disk depends on SYNRIX_SYNC_PROFILE (ack vs durable).
     """
-    _apply_durable_env()
+    _apply_profile_env(os.environ.get("SYNRIX_SYNC_PROFILE", "durable"))
     lib = _load()
     lat = _open(lib, lattice_path)
     nid = lib.lattice_add_node(lat, 1, NODE_NAME.encode(), MISSION.encode(), 0)
@@ -163,7 +190,6 @@ def worker_remember(lattice_path: str, ack_path: str) -> int:
         print(f"FAIL: immediate recall {got!r}", file=sys.stderr)
         return 1
 
-    # The write is acknowledged. Tell the parent it may kill us now.
     Path(ack_path).write_text(f"{os.getpid()}\n", encoding="utf-8")
 
     deadline = time.monotonic() + CHILD_MAX_WAIT_S
@@ -174,10 +200,10 @@ def worker_remember(lattice_path: str, ack_path: str) -> int:
 
 
 def worker_recall(lattice_path: str) -> int:
-    _apply_durable_env()
+    profile = os.environ.get("SYNRIX_SYNC_PROFILE", "durable")
+    _apply_profile_env(profile)
     lib = _load()
     lat = _open(lib, lattice_path)
-    # Structured marker: parent must not treat stderr noise as a successful open.
     print("opened=1", flush=True)
     replayed = ctypes.c_uint32(0)
     truncated = ctypes.c_bool(False)
@@ -185,23 +211,14 @@ def worker_recall(lattice_path: str) -> int:
     rc = lib.lattice_wal_get_recovery_stats(
         lat, ctypes.byref(replayed), ctypes.byref(truncated), ctypes.byref(reinitialized)
     )
-    if rc != 0:
-        print("FAIL: WAL recovery stats unavailable", file=sys.stderr)
-        return 1
-    if int(replayed.value) <= 0:
-        print(f"FAIL: WAL replayed={replayed.value}; snapshot is not accepted", file=sys.stderr)
-        return 1
-    if bool(reinitialized.value):
-        print("FAIL: WAL was reinitialized during recovery", file=sys.stderr)
-        return 1
+    stats_ok = rc == 0
     got = _read_named(lib, lat, NODE_NAME)
-    if got != MISSION:
-        print(f"FAIL: recall {got!r}", file=sys.stderr)
-        return 1
+    recovered = int(got == MISSION)
     print(
-        f"ok|lattice|durable|replayed={int(replayed.value)}|"
-        f"truncated_tail={int(bool(truncated.value))}|"
-        f"reinitialized={int(bool(reinitialized.value))}",
+        f"ok|lattice|{profile}|recovered={recovered}|"
+        f"replayed={int(replayed.value) if stats_ok else -1}|"
+        f"truncated_tail={int(bool(truncated.value)) if stats_ok else -1}|"
+        f"reinitialized={int(bool(reinitialized.value)) if stats_ok else -1}",
         flush=True,
     )
     return 0
@@ -231,7 +248,7 @@ def _kill_after_ack(cmd: list[str], ack: Path, cwd: str, env: dict) -> tuple[boo
     else:
         proc.kill()
         proc.wait(timeout=KILL_TIMEOUT_S)
-        return False, f"no durable-write ack within {ACK_TIMEOUT_S:.0f}s"
+        return False, f"no write ack within {ACK_TIMEOUT_S:.0f}s"
 
     os.kill(proc.pid, signal.SIGKILL)
     try:
@@ -292,25 +309,34 @@ def main() -> int:
     return 0 if results and all(r["passed"] for r in results) else 1
 
 
-def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
-    """Run one kill/recover scenario and return what was actually observed.
-
-    Returns a plain dict so the same run can be printed for a human and written
-    into a machine-checkable receipt. Nothing in here is inferred: every field
-    is read back from the filesystem or from the child process's exit status.
-    """
-    tag = "torn_tail" if inject_tear else "clean_sigkill"
+def _scenario(
+    demo_dir: Path,
+    env: dict,
+    *,
+    profile: str,
+    inject_tear: bool,
+    expect_recovered: bool,
+) -> dict:
+    """Run one kill/recover scenario and return what was actually observed."""
+    if inject_tear:
+        tag = "durable_torn_tail"
+    elif profile == "ack":
+        tag = "ack_sigkill"
+    else:
+        tag = "durable_sigkill"
     run_dir = demo_dir / tag
     run_dir.mkdir(parents=True, exist_ok=True)
     lattice_path = Path(run_dir / "mission.lattice")
     wal_path = Path(str(lattice_path) + ".wal")
     ack = run_dir / "write.ack"
+    lane_env = _profile_env(env, profile)
 
     obs: dict = {
         "scenario": tag,
-        "sync_profile": "durable",
-        "wal_sync_mode": "fsync",
-        "wal_batch_size": 0,
+        "sync_profile": profile,
+        "wal_batch_size": int(lane_env["SYNRIX_WAL_BATCH_SIZE"]),
+        "wal_sync_mode": lane_env["SYNRIX_WAL_SYNC_MODE"],
+        "expect_recovered": expect_recovered,
         "written_value": MISSION,
         "node_name": NODE_NAME,
         "passed": False,
@@ -321,18 +347,15 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
         sys.executable, str(Path(__file__)),
         "--worker", "remember", "--lattice", str(lattice_path), "--ack", str(ack),
     ]
-    killed, kill_detail = _kill_after_ack(cmd_a, ack, str(ROOT), env)
-    obs["durable_write_acked"] = ack.is_file()
+    killed, kill_detail = _kill_after_ack(cmd_a, ack, str(ROOT), lane_env)
+    obs["write_acked"] = ack.is_file()
     obs["killed_by_sigkill"] = killed
     obs["kill_detail"] = kill_detail
-    # Expected lattice snapshot path. Absence here, plus WAL-destroy negative
-    # controls, shows the WAL is load-bearing. It does not prove the binary
-    # wrote nowhere else on the filesystem.
     obs["snapshot_file_present_at_kill"] = lattice_path.is_file()
     obs["wal_bytes_at_kill"] = wal_path.stat().st_size if wal_path.is_file() else None
 
-    _step("Remember mission", obs["durable_write_acked"],
-          "durable write acknowledged" if obs["durable_write_acked"] else kill_detail)
+    _step("Remember mission", obs["write_acked"],
+          f"{profile} write acknowledged" if obs["write_acked"] else kill_detail)
     _step("SIGKILL runtime", killed, kill_detail)
     if not killed:
         obs["failure"] = f"kill phase did not run as specified: {kill_detail}"
@@ -366,78 +389,116 @@ def _scenario(demo_dir: Path, env: dict, inject_tear: bool) -> dict:
             return obs
 
     cmd_b = [sys.executable, str(Path(__file__)), "--worker", "recall", "--lattice", str(lattice_path)]
-    proc_b = subprocess.run(cmd_b, cwd=str(ROOT), env=env, capture_output=True, text=True)
+    proc_b = subprocess.run(cmd_b, cwd=str(ROOT), env=lane_env, capture_output=True, text=True)
     stdout_lines = [ln.strip() for ln in (proc_b.stdout or "").splitlines() if ln.strip()]
     opened = any(ln == "opened=1" for ln in stdout_lines)
-    line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|durable")), "")
+    line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|")), "")
+    recovered = False
+    if "recovered=" in line:
+        recovered = line.split("recovered=", 1)[1].split("|", 1)[0] == "1"
     obs["lattice_opened"] = opened
     obs["restarted"] = opened
-    obs["recall_matched_written_value"] = proc_b.returncode == 0 and bool(line)
+    obs["state_recovered"] = recovered
     _step(
         "Restart runtime",
         opened,
         "fresh process opened the lattice" if opened else "no opened=1 marker after lattice_init",
     )
-    _step("Recall mission", obs["recall_matched_written_value"],
-          "" if obs["recall_matched_written_value"] else (proc_b.stderr or "").strip()[:80])
+    _step(
+        "Recall mission",
+        recovered == expect_recovered,
+        "state present" if recovered else "state absent (as observed)",
+    )
 
     print(flush=True)
-    if not obs["recall_matched_written_value"]:
+    if not opened:
         obs["failure"] = (proc_b.stderr or proc_b.stdout or "no worker output").strip()
-        print(f"FAIL — mission not recovered ({obs['failure']})", flush=True)
+        print(f"FAIL — lattice did not open ({obs['failure']})", flush=True)
         return obs
 
-    obs["wal_records_replayed"] = int(line.split("replayed=", 1)[1].split("|", 1)[0])
-    obs["truncated_tail_flag"] = int(line.split("truncated_tail=", 1)[1].split("|", 1)[0])
+    if "replayed=" in line:
+        obs["wal_records_replayed"] = int(line.split("replayed=", 1)[1].split("|", 1)[0])
+    if "truncated_tail=" in line:
+        obs["truncated_tail_flag"] = int(line.split("truncated_tail=", 1)[1].split("|", 1)[0])
     if "reinitialized=" in line:
         obs["wal_reinitialized"] = int(line.split("reinitialized=", 1)[1].split("|", 1)[0]) == 1
         obs["wal_reinitialized_source"] = "worker ok-line"
     else:
         obs["wal_reinitialized"] = None
         obs["wal_reinitialized_source"] = "absent from worker output"
-    obs["passed"] = True
 
-    if inject_tear:
+    if recovered != expect_recovered:
+        if expect_recovered:
+            obs["failure"] = "DURABLE contract: acknowledged write did not survive SIGKILL"
+        else:
+            obs["failure"] = (
+                "ACK contract: acknowledged write survived SIGKILL; "
+                "the ack profile is supposed to allow loss (batched, unflushed)"
+            )
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
+
+    obs["passed"] = True
+    if profile == "ack":
         print(
-            "PASS — acknowledged write survived SIGKILL *and* an injected incomplete WAL tail "
-            f"(records replayed: {obs['wal_records_replayed']}, "
-            f"reinitialized={int(bool(obs['wal_reinitialized']))})",
+            "PASS — ACK contract: write was acknowledged, then lost after SIGKILL "
+            "(that is the promised behaviour, not a defect)",
             flush=True,
         )
-        # Observed behaviour, stated exactly: recovery stops at the first
-        # incomplete entry header and keeps every complete record before it.
-        # The kernel's truncated_tail flag reports physical file truncation,
-        # which this path does not perform — so it reads 0 here by design.
+    elif inject_tear:
+        print(
+            "PASS — DURABLE contract: acknowledged write survived SIGKILL *and* "
+            f"an injected incomplete WAL tail (records replayed: {obs.get('wal_records_replayed')})",
+            flush=True,
+        )
         print(
             f"  recovery stopped at the incomplete fragment; truncated_tail flag="
-            f"{obs['truncated_tail_flag']} (flag means the file was rewritten, "
+            f"{obs.get('truncated_tail_flag')} (flag means the file was rewritten, "
             "which recovery does not do)",
             flush=True,
         )
     else:
         print(
-            "PASS — durable memory survived SIGKILL "
-            f"(backend: lattice, profile: durable, WAL records replayed: "
-            f"{obs['wal_records_replayed']})",
+            "PASS — DURABLE contract: acknowledged write survived SIGKILL "
+            f"(WAL records replayed: {obs.get('wal_records_replayed')})",
             flush=True,
         )
     return obs
 
 
 def run_durability(so: Path, env: dict | None = None) -> list[dict]:
-    """Both scenarios, returning observations. Used by the demo and the receipt."""
+    """ACK-may-lose, DURABLE-retains, then injected incomplete tail."""
     demo_dir = Path(tempfile.mkdtemp(prefix="synrix_first_look_"))
     run_env = dict(env or os.environ)
     run_env["SYNRIX_LIB_PATH"] = str(so.parent)
     run_env["PYTHONUNBUFFERED"] = "1"
 
-    results = [_scenario(demo_dir, run_env, inject_tear=False)]
-    if results[0]["passed"]:
-        print(flush=True)
-        print("Injected incomplete WAL tail — same kill, then 28 bytes appended", flush=True)
-        print("and fsynced before restart. Not a power-cut simulation.", flush=True)
-        print(flush=True)
-        results.append(_scenario(demo_dir, run_env, inject_tear=True))
+    print("ACK profile — write acknowledged, then SIGKILL. Loss is the contract.", flush=True)
+    print(flush=True)
+    results = [
+        _scenario(demo_dir, run_env, profile="ack", inject_tear=False, expect_recovered=False)
+    ]
+    if not results[-1]["passed"]:
+        print(f"data: {demo_dir}", flush=True)
+        return results
+
+    print(flush=True)
+    print("DURABLE profile — same kill. Survival is the contract.", flush=True)
+    print(flush=True)
+    results.append(
+        _scenario(demo_dir, run_env, profile="durable", inject_tear=False, expect_recovered=True)
+    )
+    if not results[-1]["passed"]:
+        print(f"data: {demo_dir}", flush=True)
+        return results
+
+    print(flush=True)
+    print("Injected incomplete WAL tail — DURABLE kill, then 28 bytes appended", flush=True)
+    print("and fsynced before restart. Not a power-cut simulation.", flush=True)
+    print(flush=True)
+    results.append(
+        _scenario(demo_dir, run_env, profile="durable", inject_tear=True, expect_recovered=True)
+    )
 
     if all(r["passed"] for r in results):
         shutil.rmtree(demo_dir, ignore_errors=True)

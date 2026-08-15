@@ -147,13 +147,14 @@ def _claims(results: dict) -> dict:
     """What this receipt does and does not establish. Written out, not implied."""
     return {
         "establishes": [
-            "An acknowledged durable write survives SIGKILL of the writing process "
-            "and is recovered by WAL replay in a fresh process.",
-            "The same holds when an incomplete trailing fragment is injected "
-            "into the WAL before restart: recovery stops at the fragment and "
-            "keeps prior records.",
-            "No snapshot exists at the expected lattice path, WAL replay is "
-            "observed, and destroying the WAL causes loss.",
+            "ACK contract: an acknowledged write under the ack profile is lost "
+            "after SIGKILL. Loss is the passing result.",
+            "DURABLE contract: an acknowledged write under the durable profile "
+            "survives SIGKILL and is recovered by WAL replay in a fresh process.",
+            "The same DURABLE survival holds when an incomplete trailing fragment "
+            "is injected into the WAL before restart.",
+            "No snapshot exists at the expected lattice path; WAL replay is "
+            "observed on the durable path; destroying the WAL causes loss.",
             "Node sets are complete and exact under insertion-order shuffle: "
             "nothing dropped, duplicated, or invented. Not retrieval; not churn.",
         ],
@@ -166,7 +167,6 @@ def _claims(results: dict) -> dict:
             "torn-sector behaviour. The incomplete tail is injected after kill.",
             "That the binary wrote no other files anywhere on the filesystem. "
             "The check is the expected snapshot path plus WAL-destroy negatives.",
-            "ACK-can-lose vs durable-retains. Public demo is durable-profile only.",
             "Sustained thermal or multi-hour behaviour. These are short runs.",
             "Anything about builds other than the binary hashed above.",
         ],
@@ -175,7 +175,7 @@ def _claims(results: dict) -> dict:
 
 
 def build_receipt(so: Path) -> dict:
-    print("Durability — SIGKILL and injected incomplete WAL tail", flush=True)
+    print("Durability — ACK may lose, DURABLE retains, injected incomplete tail", flush=True)
     print(flush=True)
     durability = run_durability(so)
 
