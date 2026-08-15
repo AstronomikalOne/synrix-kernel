@@ -68,14 +68,15 @@ Intended contract (ACK vs DURABLE is demonstrated in `make first-look`):
 
 ```text
 ACK
-  Process-local acknowledgement.
-  May be lost under declared failure classes.
-  Demonstrated: write ACK, SIGKILL, state absent. PASS — expected contract.
+  Process-local acknowledgement. No durability guarantee.
+  Writes may be lost; incidental persistence after a flush is allowed.
+  Witness (this pack): batch=50000, one op, SIGKILL immediately after ACK
+  → state absent. That demonstrates permitted loss, not "ACK must vanish."
 
 DURABLE
   Acknowledgement after declared persistence boundary.
   Demonstrated: SIGKILL after ACK, fresh-process WAL replay,
-  injected incomplete WAL tail, WAL-destroy negatives.
+  injected incomplete WAL tail, WAL delete, WAL zero.
 
 RECEIPT
   Machine-verifiable observation of the above against

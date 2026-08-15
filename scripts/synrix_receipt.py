@@ -147,14 +147,16 @@ def _claims(results: dict) -> dict:
     """What this receipt does and does not establish. Written out, not implied."""
     return {
         "establishes": [
-            "ACK contract: an acknowledged write under the ack profile is lost "
-            "after SIGKILL. Loss is the passing result.",
+            "ACK has no durability guarantee. In the unflushed witness lane "
+            "(batch=50000, one op, SIGKILL immediately after ACK) the "
+            "acknowledged write is absent. That is a witness of permitted loss, "
+            "not a rule that ACK writes must disappear.",
             "DURABLE contract: an acknowledged write under the durable profile "
             "survives SIGKILL and is recovered by WAL replay in a fresh process.",
             "The same DURABLE survival holds when an incomplete trailing fragment "
             "is injected into the WAL before restart.",
-            "No snapshot exists at the expected lattice path; WAL replay is "
-            "observed on the durable path; destroying the WAL causes loss.",
+            "No snapshot exists at the expected lattice path after DURABLE kill. "
+            "Deleting that WAL, or zeroing it, leaves the mission absent.",
             "Node sets are complete and exact under insertion-order shuffle: "
             "nothing dropped, duplicated, or invented. Not retrieval; not churn.",
         ],
@@ -167,6 +169,8 @@ def _claims(results: dict) -> dict:
             "torn-sector behaviour. The incomplete tail is injected after kill.",
             "That the binary wrote no other files anywhere on the filesystem. "
             "The check is the expected snapshot path plus WAL-destroy negatives.",
+            "That ACK writes must disappear. ACK means no durability guarantee. "
+            "The unflushed lane is a witness of permitted loss, not a must-lose API.",
             "Sustained thermal or multi-hour behaviour. These are short runs.",
             "Anything about builds other than the binary hashed above.",
         ],

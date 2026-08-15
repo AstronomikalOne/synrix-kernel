@@ -23,8 +23,9 @@ cd synrix-kernel && make first-look
 
 | Check | What is asserted |
 |-------|------------------|
-| **ACK** | Write acknowledged, then `SIGKILL`. State is **absent**. PASS — expected contract. Loss is the promised behaviour. |
-| **DURABLE** | Same kill. State **survives** WAL replay. No file at the expected snapshot path. Destroying the WAL causes loss. |
+| **ACK (unflushed witness)** | ACK has no durability guarantee. This lane (batch=50000, one op, immediate SIGKILL) expects the write **absent** — a witness of permitted loss, not “ACK must vanish.” |
+| **DURABLE** | Same kill. State **survives** WAL replay. No file at the expected snapshot path. |
+| **WAL delete / zero** | After DURABLE kill, deleting or zeroing that WAL leaves the mission absent. Observed by `make receipt`. |
 | **Injected incomplete WAL tail** | DURABLE kill, then 28 bytes appended and fsynced. Recovery stops at the fragment. Not a power-cut simulation. |
 | **Insertion-order set integrity** | The same 2000 nodes, two insert orders, complete exact set. Not retrieval. Not churn. |
 

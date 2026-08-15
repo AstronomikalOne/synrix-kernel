@@ -26,10 +26,14 @@ receipts from different machines should agree on those and differ everywhere in
 
 ## What the checks establish
 
-**ACK vs DURABLE.** Same write, same `SIGKILL`, two profiles. Under `ack`
-(batched WAL), the acknowledged write is **absent** after restart — and that
-is a passing result. Under `durable` (per-entry fsync), it **survives**. The
-kernel is the product; the receipt records which contract was observed.
+**ACK vs DURABLE.** ACK means **no durability guarantee** (writes may be lost;
+incidental persistence after a flush is allowed). This pack also runs an
+**unflushed witness**: batch=50000, one operation, SIGKILL immediately after
+ACK — the write is absent. That demonstrates permitted loss. It does not define
+ACK as “the mode where writes must disappear.”
+
+DURABLE (per-entry fsync) **survives** the same kill. The kernel is the product;
+the receipt records which contract was observed.
 
 **DURABLE mechanics.** Under `SYNRIX_SYNC_PROFILE=durable` (`fsync`, batch size
 0) the parent sends `SIGKILL` after the write is acknowledged. The harness
@@ -66,16 +70,18 @@ counts, duplicate counts, set equality, and payload integrity.
   fsynced. Not a power cut.
 - **That the binary wrote no other files anywhere.** Expected snapshot path
   plus WAL-destroy negatives only.
+- **That ACK writes must disappear.** ACK means no durability guarantee. The
+  unflushed lane is a witness of permitted loss.
 - **Sustained thermal or multi-hour behaviour.** These runs take seconds.
 - **Anything about other builds.** Only the binary whose hash appears in the
   receipt is described.
 
 ## Proving the checks can fail
 
-`make test` runs `scripts/test_durability_harness.py`, which deletes the WAL,
-zeroes the WAL, and asserts that no snapshot exists at kill time. Each of those
-must cause the demo to report loss. A durability check that passes unconditionally
-would be worse than no check, because it would look like evidence.
+`make receipt` copies the durable WAL, then deletes it and zeroes a second
+copy. Both leaves the mission absent. `make test` repeats those negatives as
+unittests. A durability check that passes unconditionally would be worse than
+no check, because it would look like evidence.
 
 ## Roadmap
 

@@ -30,19 +30,21 @@ cd synrix-kernel
 make first-look
 ```
 
-On **aarch64** (Jetson-class) this runs the ACK/DURABLE contract, an injected
-incomplete WAL tail, and set-integrity, then writes a receipt to
-`receipts/generated/`:
+On **aarch64** (Jetson-class) this writes a receipt to `receipts/generated/`
+from observations of this binary:
 
-1. **ACK profile.** Child writes, acknowledges, parent sends `SIGKILL`. The
-   write is **lost**. That is a passing result — the promised behaviour, not a
-   defect. Watch us lose this state on purpose.
-2. **DURABLE profile.** Same kill. The write **survives** WAL replay in a
-   fresh process. No file exists at the expected snapshot path; destroying the
-   WAL causes loss.
-3. **Injected incomplete WAL tail.** DURABLE kill, then 28 bytes appended and
+1. **Unflushed ACK witness.** ACK has **no durability guarantee**. This lane is
+   one write, WAL batch 50000, kill immediately after ACK — so the write is
+   expected **absent**. That is a witness of permitted loss, not a rule that
+   ACK writes must vanish. Incidental persistence after a real flush would not
+   violate the ACK contract; it would fail *this* witness.
+2. **DURABLE profile.** Same kill. The write **survives** WAL replay.
+3. **WAL delete / WAL zero.** After a successful DURABLE kill, the WAL is
+   copied, then deleted or zeroed. The mission is absent. This is in the
+   receipt, not only in `make test`.
+4. **Injected incomplete WAL tail.** DURABLE kill, then 28 bytes appended and
    fsynced. Recovery stops at the fragment. Not a power-cut simulation.
-4. **Insertion-order set integrity.** 2000 nodes, natural then shuffled.
+5. **Insertion-order set integrity.** 2000 nodes, natural then shuffled.
    Complete exact set. Not retrieval; not churn.
 
 Every printed check derives from an observed condition. The kill is confirmed by

@@ -321,7 +321,7 @@ def _scenario(
     if inject_tear:
         tag = "durable_torn_tail"
     elif profile == "ack":
-        tag = "ack_sigkill"
+        tag = "ack_unflushed_loss_witness"
     else:
         tag = "durable_sigkill"
     run_dir = demo_dir / tag
@@ -432,8 +432,11 @@ def _scenario(
             obs["failure"] = "DURABLE contract: acknowledged write did not survive SIGKILL"
         else:
             obs["failure"] = (
-                "ACK contract: acknowledged write survived SIGKILL; "
-                "the ack profile is supposed to allow loss (batched, unflushed)"
+                "unflushed ACK witness: the write reached disk. This lane is "
+                "batch=50000 / one op / kill immediately after ACK, so absence "
+                "is expected. ACK as a contract only means no durability "
+                "guarantee — incidental persistence after a flush would not "
+                "violate ACK, but this witness failed to demonstrate permitted loss."
             )
         print(f"FAIL — {obs['failure']}", flush=True)
         return obs
@@ -441,8 +444,8 @@ def _scenario(
     obs["passed"] = True
     if profile == "ack":
         print(
-            "PASS — ACK contract: write was acknowledged, then lost after SIGKILL "
-            "(that is the promised behaviour, not a defect)",
+            "PASS — unflushed ACK witness: acknowledged write absent after SIGKILL. "
+            "ACK has no durability guarantee; this lane is configured not to flush.",
             flush=True,
         )
     elif inject_tear:
@@ -466,14 +469,98 @@ def _scenario(
     return obs
 
 
+def _recall_observation(lattice_path: Path, env: dict) -> dict:
+    cmd = [sys.executable, str(Path(__file__)), "--worker", "recall", "--lattice", str(lattice_path)]
+    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, capture_output=True, text=True)
+    stdout_lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    opened = any(ln == "opened=1" for ln in stdout_lines)
+    line = next((ln for ln in reversed(stdout_lines) if ln.startswith("ok|lattice|")), "")
+    recovered = "recovered=1" in line
+    return {
+        "opened": opened,
+        "line": line,
+        "recovered": recovered,
+        "stderr": (proc.stderr or "").strip(),
+        "returncode": proc.returncode,
+    }
+
+
+def _wal_destroy_witness(demo_dir: Path, env: dict, *, kind: str) -> dict:
+    """After a successful DURABLE kill, destroy that WAL and confirm recall loss.
+
+    kind is 'delete' or 'zero'. The source is demo_dir/durable_sigkill, which
+    must already have passed — otherwise there is no load-bearing WAL to destroy.
+    """
+    src = demo_dir / "durable_sigkill"
+    src_wal = src / "mission.lattice.wal"
+    tag = f"wal_{kind}"
+    run_dir = demo_dir / tag
+    run_dir.mkdir(parents=True, exist_ok=True)
+    lattice_path = run_dir / "mission.lattice"
+    wal_path = Path(str(lattice_path) + ".wal")
+    lane_env = _profile_env(env, "durable")
+    obs: dict = {
+        "scenario": tag,
+        "sync_profile": "durable",
+        "destroy_kind": kind,
+        "expect_recovered": False,
+        "passed": False,
+        "failure": None,
+    }
+    if not src_wal.is_file():
+        obs["failure"] = f"no WAL at {src_wal}; cannot witness destroy-causes-loss"
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
+
+    shutil.copy2(src_wal, wal_path)
+    before = wal_path.stat().st_size
+    obs["wal_bytes_before_destroy"] = before
+    if kind == "delete":
+        wal_path.unlink()
+        detail = f"removed {src_wal.name} ({before} bytes)"
+    elif kind == "zero":
+        wal_path.write_bytes(b"\x00" * before)
+        detail = f"zeroed {src_wal.name} ({before} bytes)"
+    else:
+        obs["failure"] = f"unknown destroy kind {kind!r}"
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
+    _step("Destroy WAL", True, detail)
+
+    rec = _recall_observation(lattice_path, lane_env)
+    obs["lattice_opened"] = rec["opened"]
+    obs["state_recovered"] = rec["recovered"]
+    _step("Recall after destroy", rec["opened"] and not rec["recovered"],
+          "state absent" if not rec["recovered"] else "state still present")
+    print(flush=True)
+    if rec["recovered"]:
+        obs["failure"] = f"WAL {kind}: state still recovered; destroy was not load-bearing"
+        print(f"FAIL — {obs['failure']}", flush=True)
+        return obs
+    if not rec["opened"]:
+        # Opening a missing/zero WAL may still succeed (new empty lattice).
+        # Absence of the mission is the observation that matters.
+        pass
+    obs["passed"] = True
+    print(
+        f"PASS — WAL {kind}: destroying the durable WAL left the mission absent",
+        flush=True,
+    )
+    return obs
+
+
 def run_durability(so: Path, env: dict | None = None) -> list[dict]:
-    """ACK-may-lose, DURABLE-retains, then injected incomplete tail."""
+    """Unflushed ACK witness, DURABLE retain, WAL destroy, incomplete tail."""
     demo_dir = Path(tempfile.mkdtemp(prefix="synrix_first_look_"))
     run_env = dict(env or os.environ)
     run_env["SYNRIX_LIB_PATH"] = str(so.parent)
     run_env["PYTHONUNBUFFERED"] = "1"
 
-    print("ACK profile — write acknowledged, then SIGKILL. Loss is the contract.", flush=True)
+    print(
+        "ACK profile — no durability guarantee. This lane is one write, "
+        "batch=50000, kill immediately after ACK: absence is the witness.",
+        flush=True,
+    )
     print(flush=True)
     results = [
         _scenario(demo_dir, run_env, profile="ack", inject_tear=False, expect_recovered=False)
@@ -488,6 +575,19 @@ def run_durability(so: Path, env: dict | None = None) -> list[dict]:
     results.append(
         _scenario(demo_dir, run_env, profile="durable", inject_tear=False, expect_recovered=True)
     )
+    if not results[-1]["passed"]:
+        print(f"data: {demo_dir}", flush=True)
+        return results
+
+    print(flush=True)
+    print("WAL destroy — delete, then zero, the durable WAL. Loss is required.", flush=True)
+    print(flush=True)
+    results.append(_wal_destroy_witness(demo_dir, run_env, kind="delete"))
+    if not results[-1]["passed"]:
+        print(f"data: {demo_dir}", flush=True)
+        return results
+    print(flush=True)
+    results.append(_wal_destroy_witness(demo_dir, run_env, kind="zero"))
     if not results[-1]["passed"]:
         print(f"data: {demo_dir}", flush=True)
         return results

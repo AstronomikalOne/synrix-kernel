@@ -97,7 +97,7 @@ class TestDurabilityFailurePaths(unittest.TestCase):
             self.assertIn("recovered=1", proc.stdout)
 
     def test_ack_profile_loses_acknowledged_write(self) -> None:
-        """Loss after ACK+SIGKILL is a passing observation of the ack contract."""
+        """Loss after ACK+SIGKILL in the unflushed (batch=50000, one op) witness."""
         with tempfile.TemporaryDirectory() as tmp:
             wal = _write_then_sigkill(Path(tmp), profile="ack")
             proc = subprocess.run(
@@ -148,8 +148,10 @@ class TestDurabilityFailurePaths(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.count("SIGKILLed post-ACK, pre-clean-exit"), 3)
-        self.assertIn("ACK contract: write was acknowledged, then lost", proc.stdout)
+        self.assertIn("unflushed ACK witness: acknowledged write absent", proc.stdout)
         self.assertIn("DURABLE contract: acknowledged write survived SIGKILL", proc.stdout)
+        self.assertIn("WAL delete: destroying the durable WAL left the mission absent", proc.stdout)
+        self.assertIn("WAL zero: destroying the durable WAL left the mission absent", proc.stdout)
         self.assertIn("injected incomplete WAL tail", proc.stdout)
 
     def test_stderr_without_opened_marker_is_not_a_restart(self) -> None:
