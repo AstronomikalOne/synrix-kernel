@@ -2,15 +2,15 @@
 FROM python:3.12-slim
 
 LABEL description="Synrix OEM memory kernel — first look"
-LABEL version="1.1"
 
 WORKDIR /app
 
 COPY scripts/demo_first_look.py            scripts/demo_first_look.py
 COPY scripts/demo_first_look_durability.py scripts/demo_first_look_durability.py
+COPY scripts/demo_order_invariance.py      scripts/demo_order_invariance.py
+COPY scripts/synrix_receipt.py             scripts/synrix_receipt.py
 COPY scripts/check_demo_pack.py            scripts/check_demo_pack.py
 COPY docs/gtm/                             docs/gtm/
-COPY receipts/first_look/                  receipts/first_look/
 COPY lib/                                  lib/
 
 RUN mkdir -p build && \

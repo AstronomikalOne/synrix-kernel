@@ -3,3 +3,7 @@ __pycache__/
 build/
 *.lattice
 *.wal
+
+# Receipts are generated per machine by `make receipt`. We do not ship them —
+# a receipt you did not produce tells you nothing about your hardware.
+receipts/generated/

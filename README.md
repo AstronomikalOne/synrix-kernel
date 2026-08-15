@@ -2,20 +2,22 @@
 
 **We're not your AI Act program — we're the part of the stack that can still tell the truth after the process dies.**
 
-Deterministic, WAL-backed memory kernel for edge agents on Jetson-class hardware.  
+WAL-backed memory kernel for edge agents on Jetson-class hardware.
 Not a compliance platform. Not cloud memory. Not a chatbot SDK. Not a second SQLite.
 
 One-pager: [`docs/gtm/SYNRIX_OEM_ONE_PAGER.md`](docs/gtm/SYNRIX_OEM_ONE_PAGER.md)
 
 ---
 
-## Why not SQLite?
+## This repo ships no numbers
 
-SQLite is excellent on-device storage — free, battle-tested, and enough when you only need durable rows. A capable team can also build durability contracts, failure injection, and evidence generation around it; teams do. The question is whether you want that on your roadmap.
+There are no pre-computed benchmark files here, and that is deliberate. A JSON
+result you did not produce tells you nothing about your hardware, and hashing it
+only proves the file is still itself.
 
-Synrix ships those as one engineered component: retrieval semantics, deterministic behavior under insert-order and churn, durable persistence, and the evidence artifacts, tested together and versioned together. The sale is the NRE you don't do and the failure modes you don't discover in the field.
-
-Device-key signing of those receipts is the next release, not this demo. Full paragraph: [`docs/gtm/SQLITE_OBJECTION.md`](docs/gtm/SQLITE_OBJECTION.md).
+Everything below is measured by `libsynrix.so` in this repo, on your machine,
+at the moment you run it. If a check cannot be measured on your platform, you
+get an honest refusal instead of a fallback number.
 
 ---
 
@@ -27,30 +29,85 @@ cd synrix-kernel
 make first-look
 ```
 
-Prints the one-pager and four receipts, then — on **aarch64** (Jetson-class) with a current `libsynrix.so` — runs the live durability test twice:
+On **aarch64** (Jetson-class) this runs three checks and writes a receipt to
+`receipts/generated/`:
 
-1. **Clean hard kill.** Child writes durably, acknowledges, parent sends `SIGKILL`. No snapshot exists on disk; the WAL is the only persistence. Fresh process replays and recalls.
-2. **Torn tail.** Same kill, then a half-written record is appended to the WAL before restart. Recovery stops at the tear and keeps every complete record before it.
+1. **Clean hard kill.** A child process writes under durable sync and signals
+   the write was acknowledged. The parent sends `SIGKILL` — uncatchable, so no
+   handler, no flush, no checkpoint. The demo verifies no snapshot file exists,
+   so the WAL is the only persistence in play. A fresh process replays and
+   recalls the value.
+2. **Torn tail.** Same kill, then a half-written record is appended to the WAL
+   before restart. Recovery stops at the tear and keeps every complete record
+   before it, without reinitializing.
+3. **Insertion-order set integrity.** 2000 nodes inserted in natural order, then
+   again under shuffle seed 12345. The returned set is complete and exact —
+   nothing dropped, duplicated, or invented, payloads intact.
 
-Every printed check derives from an observed condition — the kill is verified by exit status `-SIGKILL`, not assumed. `scripts/test_durability_harness.py` proves the demo can fail: delete or zero the WAL and it reports loss.
+Every printed check derives from an observed condition. The kill is confirmed by
+exit status `-SIGKILL`, not assumed.
 
-On **x86_64** (laptop / CI), live durability is a designed limit — receipts print, exit 0, no FAIL banner. Receipts-only: `make first-look-receipts`.
+On **x86_64** the shipped binary cannot measure durability, so `make first-look`
+says so and writes nothing. There is no receipts-only fallback path.
 
 ---
 
-## Numbers (receipted)
+## The receipt
 
-| Metric | Value |
-|--------|-------|
-| Label-hit Recall@10 | ~98.9% |
-| Median native retrieval (C/NEON, warm-process) | ~25.5 µs |
-| Work vs full scan | ~13% bytes |
-| Ordered top-k invariance under insertion-order shuffle | 2000/2000 — HNSW control on the same test: 863/2000 |
-| Ordered top-k invariance, incremental vs batch build | 2000/2000 |
+```bash
+make receipt
+```
 
-Read those last two precisely: **ordered top-k identical under one controlled shuffle seed (12345)**, not bitwise-identical execution across builds or platforms. The HNSW control arm is the point — it scores 43% on the test Synrix passes at 100%.
+Records what a second machine would need to compare against: binary SHA-256 and
+GNU build ID, board model, SoC, kernel and L4T release, power mode, libc, page
+size, SHA-256 of every harness source, the exact command, and every observed
+value — including failures. It also carries an explicit `claims` block listing
+what the run does *not* establish.
 
-No speedup-ratio headline. Commodity ANN also hits high recall at tiny byte fractions — the surviving differentiator is order-invariance. Receipts live in `receipts/first_look/`; what they do and don't establish is in [`docs/RECEIPTS.md`](docs/RECEIPTS.md).
+Receipts are gitignored. Yours should come from your hardware.
+
+---
+
+## What this does not claim
+
+Scope matters more than adjectives, so plainly:
+
+- **Ordered-sequence equality under reordering is not claimed.** Queries return
+  nodes in insertion order, so sequences differ between builds by design. The
+  claim is set completeness and exactness, which is narrower.
+- **No retrieval, recall, or latency numbers.** This repo measures durability
+  and set integrity. Nothing else.
+- **Short runs only.** Nothing here speaks to sustained thermal behaviour.
+- **The binary you hashed is the only one described.** Nothing generalizes to
+  other builds.
+
+---
+
+## Verify it can fail
+
+A durability demo that cannot fail is decoration.
+
+```bash
+make test
+```
+
+`scripts/test_durability_harness.py` deletes the WAL, zeroes the WAL, and
+asserts that no snapshot exists at kill time. If any of those let the demo pass,
+the test fails.
+
+---
+
+## Why not SQLite?
+
+SQLite is excellent on-device storage — free, battle-tested, and enough when you
+only need durable rows. A capable team can also build durability contracts,
+failure injection, and evidence generation around it. Teams do.
+
+Synrix is that layer, already built and versioned as one component. The offer is
+the NRE you skip and the failure modes you meet in a test suite instead of in the
+field. Full paragraph: [`docs/gtm/SQLITE_OBJECTION.md`](docs/gtm/SQLITE_OBJECTION.md).
+
+Device-key signing of receipts is the next release, not this demo.
 
 ---
 

@@ -23,7 +23,7 @@ jobs:
         run: python3 scripts/test_check_demo_pack.py
       - name: Durability harness tests (live cases SKIP on x86_64)
         run: python3 scripts/test_durability_harness.py -v
-      - name: First look (receipts + live or designed-limit banner)
+      - name: First look (designed-limit banner on x86_64; no receipt written)
         run: make first-look
 
   pack-health:
