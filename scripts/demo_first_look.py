@@ -73,7 +73,7 @@ def show_designed_limit(so: Path) -> None:
     print("  receipt claiming otherwise would be worth nothing.")
     print()
     print("  This repo ships no pre-computed numbers to fall back on, by design.")
-    print("  Run `make first-look` on aarch64 (Jetson-class) to see the evidence.")
+    print("  Rebuild libsynrix.so from current Synrix source for this architecture.")
     print()
 
 

@@ -5,7 +5,7 @@ The point of these tests is not to watch the demo pass. It is to prove the demo
 can fail: if we destroy the WAL, recall must report loss rather than quietly
 printing a checkmark. A durability demo that cannot fail is decoration.
 
-Skipped on platforms whose pack has no WAL recovery symbol (x86_64 today).
+Skipped on platforms whose pack has no WAL recovery symbol.
 """
 from __future__ import annotations
 

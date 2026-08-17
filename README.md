@@ -50,8 +50,9 @@ from observations of this binary:
 Every printed check derives from an observed condition. The kill is confirmed by
 exit status `-SIGKILL`, not assumed.
 
-On **x86_64** the shipped binary cannot measure durability, so `make first-look`
-says so and writes nothing. There is no receipts-only fallback path.
+On **x86_64** Linux (including WSL) the shipped binary runs the same live
+lanes. The receipt names that PC — CPU, kernel, binary hash — not Jetson /
+L4T / nvpmodel. That is a portable contract smoke, not an OEM silicon receipt.
 
 ---
 
